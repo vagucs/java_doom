@@ -14,6 +14,7 @@ package doom;
 import java.util.ArrayList;
 import java.util.List;
 
+/** Status bar (st_stuff / st_lib), including vanilla HUD face widget. */
 public final class Status
 {
     private static final int AMMO_X = 44;
@@ -28,6 +29,24 @@ public final class Status
     private static final int ARMS_Y = 172;
     private static final int KEY_X = 239;
 
+    private static final int ST_NUMPAINFACES = 5;
+    private static final int ST_NUMSTRAIGHTFACES = 3;
+    private static final int ST_NUMTURNFACES = 2;
+    private static final int ST_NUMSPECIALFACES = 3;
+    private static final int ST_FACESTRIDE =
+        ST_NUMSTRAIGHTFACES + ST_NUMTURNFACES + ST_NUMSPECIALFACES;
+    private static final int ST_TURNOFFSET = ST_NUMSTRAIGHTFACES;
+    private static final int ST_OUCHOFFSET = ST_TURNOFFSET + ST_NUMTURNFACES;
+    private static final int ST_EVILGRINOFFSET = ST_OUCHOFFSET + 1;
+    private static final int ST_RAMPAGEOFFSET = ST_EVILGRINOFFSET + 1;
+    private static final int ST_GODFACE = ST_NUMPAINFACES * ST_FACESTRIDE;
+    private static final int ST_DEADFACE = ST_GODFACE + 1;
+    private static final int ST_EVILGRINCOUNT = 2 * Defs.TICRATE;
+    private static final int ST_STRAIGHTFACECOUNT = Defs.TICRATE / 2;
+    private static final int ST_TURNCOUNT = Defs.TICRATE;
+    private static final int ST_RAMPAGEDELAY = 2 * Defs.TICRATE;
+    private static final int ST_MUCHPAIN = 20;
+
     private final Wad wad;
     private final byte[] sbar;
     private final List<byte[]> tallNum = new ArrayList<>();
@@ -37,9 +56,18 @@ public final class Status
     private final byte[] armsBg;
     private final List<byte[]> armsOff = new ArrayList<>();
     private final List<byte[]> faces = new ArrayList<>();
-    private final byte[] godFace;
-    private final byte[] deadFace;
+    private final byte[] fallbackFace;
     private final List<byte[]> font = new ArrayList<>();
+
+    private int faceIndex;
+    private int faceCount;
+    private int facePriority;
+    private int oldHealth = -1;
+    private int painOldHealth = -1;
+    private int lastCalc;
+    private int lastAttackDown = -1;
+    private boolean[] oldWeaponsOwned = new boolean[9];
+    private int rnd = 1;
 
     public Status(Wad wad)
     {
@@ -57,23 +85,173 @@ public final class Status
         for (int i = 2; i < 8; ++i) {
             armsOff.add(wad.cacheLumpName("STGNUM" + i));
         }
-        byte[] fallback = wad.cacheLumpName("STFST00");
-        for (int pain = 0; pain < 5; ++pain) {
-            byte[] face = optional("STFST" + pain + "0");
-            faces.add(face != null ? face : fallback);
+        this.fallbackFace = wad.cacheLumpName("STFST00");
+        for (int pain = 0; pain < ST_NUMPAINFACES; ++pain) {
+            for (int look = 0; look < ST_NUMSTRAIGHTFACES; ++look) {
+                faces.add(optional("STFST" + pain + look));
+            }
+            faces.add(optional("STFTR" + pain + "0"));
+            faces.add(optional("STFTL" + pain + "0"));
+            faces.add(optional("STFOUCH" + pain));
+            faces.add(optional("STFEVL" + pain));
+            faces.add(optional("STFKILL" + pain));
         }
-        byte[] god = optional("STFGOD0");
-        this.godFace = god != null ? god : fallback;
-        this.deadFace = optional("STFDEAD0");
+        faces.add(optional("STFGOD0"));
+        faces.add(optional("STFDEAD0"));
         for (int ch = Defs.HU_FONTSTART; ch <= Defs.HU_FONTEND; ++ch) {
             font.add(optional(String.format("STCFN%03d", ch)));
         }
+        reset(null);
+    }
+
+    public void reset(Player player)
+    {
+        faceIndex = 0;
+        faceCount = 0;
+        facePriority = 0;
+        oldHealth = -1;
+        painOldHealth = -1;
+        lastCalc = 0;
+        lastAttackDown = -1;
+        if (player != null) {
+            oldWeaponsOwned = player.weaponowned.clone();
+        } else {
+            oldWeaponsOwned = new boolean[9];
+        }
+    }
+
+    public void ticker(Player player)
+    {
+        if (player == null) {
+            return;
+        }
+        rnd = rnd * 1103515245 + 12345;
+        int stRandom = (rnd >>> 16) & 255;
+        updateFaceWidget(player, stRandom);
+        oldHealth = player.health;
     }
 
     private byte[] optional(String name)
     {
         int n = wad.checkNumForName(name);
         return n >= 0 ? wad.cacheLumpNum(n) : null;
+    }
+
+    private byte[] facePatch(int index)
+    {
+        if (index < 0 || index >= faces.size()) {
+            return fallbackFace;
+        }
+        byte[] patch = faces.get(index);
+        return patch != null ? patch : fallbackFace;
+    }
+
+    private int calcPainOffset(Player player)
+    {
+        int health = Math.min(100, Math.max(0, player.health));
+        if (health != painOldHealth) {
+            lastCalc = ST_FACESTRIDE * Compat.intdiv((100 - health) * ST_NUMPAINFACES, 101);
+            painOldHealth = health;
+        }
+        return lastCalc;
+    }
+
+    private void updateFaceWidget(Player player, int stRandom)
+    {
+        if (facePriority < 10 && player.health <= 0) {
+            facePriority = 9;
+            faceIndex = ST_DEADFACE;
+            faceCount = 1;
+        }
+
+        if (facePriority < 9 && player.bonuscount != 0) {
+            boolean doEvilGrin = false;
+            int n = Math.min(oldWeaponsOwned.length, player.weaponowned.length);
+            for (int i = 0; i < n; ++i) {
+                if (oldWeaponsOwned[i] != player.weaponowned[i]) {
+                    doEvilGrin = true;
+                    oldWeaponsOwned[i] = player.weaponowned[i];
+                }
+            }
+            if (doEvilGrin) {
+                facePriority = 8;
+                faceCount = ST_EVILGRINCOUNT;
+                faceIndex = calcPainOffset(player) + ST_EVILGRINOFFSET;
+            }
+        }
+
+        if (facePriority < 8 && player.damagecount != 0 && player.attacker != null
+            && player.mo != null && player.attacker != player.mo) {
+            facePriority = 7;
+            if (player.health - oldHealth > ST_MUCHPAIN) {
+                faceCount = ST_TURNCOUNT;
+                faceIndex = calcPainOffset(player) + ST_OUCHOFFSET;
+            } else {
+                int badguyangle = Collision.angleTo(
+                    player.mo.x, player.mo.y, player.attacker.x, player.attacker.y);
+                int diffang;
+                boolean turnRight;
+                if (Integer.compareUnsigned(badguyangle, player.mo.angle) > 0) {
+                    diffang = badguyangle - player.mo.angle;
+                    turnRight = Integer.compareUnsigned(diffang, Defs.ANG180) > 0;
+                } else {
+                    diffang = player.mo.angle - badguyangle;
+                    turnRight = Integer.compareUnsigned(diffang, Defs.ANG180) <= 0;
+                }
+                faceCount = ST_TURNCOUNT;
+                faceIndex = calcPainOffset(player);
+                if (Integer.compareUnsigned(diffang, Defs.ANG45) < 0) {
+                    faceIndex += ST_RAMPAGEOFFSET;
+                } else if (turnRight) {
+                    faceIndex += ST_TURNOFFSET;
+                } else {
+                    faceIndex += ST_TURNOFFSET + 1;
+                }
+            }
+        }
+
+        if (facePriority < 7 && player.damagecount != 0) {
+            if (player.health - oldHealth > ST_MUCHPAIN) {
+                facePriority = 7;
+                faceCount = ST_TURNCOUNT;
+                faceIndex = calcPainOffset(player) + ST_OUCHOFFSET;
+            } else {
+                facePriority = 6;
+                faceCount = ST_TURNCOUNT;
+                faceIndex = calcPainOffset(player) + ST_RAMPAGEOFFSET;
+            }
+        }
+
+        if (facePriority < 6) {
+            if (player.attackdown) {
+                if (lastAttackDown == -1) {
+                    lastAttackDown = ST_RAMPAGEDELAY;
+                } else {
+                    lastAttackDown--;
+                    if (lastAttackDown == 0) {
+                        facePriority = 5;
+                        faceIndex = calcPainOffset(player) + ST_RAMPAGEOFFSET;
+                        faceCount = 1;
+                        lastAttackDown = 1;
+                    }
+                }
+            } else {
+                lastAttackDown = -1;
+            }
+        }
+
+        if (facePriority < 5 && (player.cheats & Defs.CF_GODMODE) != 0) {
+            facePriority = 4;
+            faceIndex = ST_GODFACE;
+            faceCount = 1;
+        }
+
+        if (faceCount == 0) {
+            faceIndex = calcPainOffset(player) + (stRandom % 3);
+            faceCount = ST_STRAIGHTFACECOUNT;
+            facePriority = 0;
+        }
+        faceCount--;
     }
 
     public void draw(int[] fb, Player player, boolean showMessages)
@@ -108,15 +286,7 @@ public final class Status
             }
         }
 
-        int health = Math.min(100, Math.max(0, player.health));
-        int pain = player.health <= 0 ? 4 : Math.min(4, Compat.intdiv((100 - health) * 5, 101));
-        if (player.health <= 0) {
-            VVideo.drawPatch(fb, FACE_X, FACE_Y, deadFace != null ? deadFace : faces.get(4));
-        } else if ((player.cheats & Defs.CF_GODMODE) != 0) {
-            VVideo.drawPatch(fb, FACE_X, FACE_Y, godFace);
-        } else {
-            VVideo.drawPatch(fb, FACE_X, FACE_Y, faces.get(pain));
-        }
+        VVideo.drawPatch(fb, FACE_X, FACE_Y, facePatch(faceIndex));
 
         int[][] slots = {
             { Defs.IT_BLUECARD, Defs.IT_BLUESKULL },

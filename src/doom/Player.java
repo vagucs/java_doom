@@ -53,6 +53,7 @@ public final class Player
     public boolean usedown;
     public int damagecount;
     public int bonuscount;
+    public Mobj attacker;
     public int extralight;
     public int refire;
     public int killcount;

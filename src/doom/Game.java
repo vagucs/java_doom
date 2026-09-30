@@ -171,6 +171,7 @@ public final class Game
             p.health -= damage;
             target.health = p.health;
             p.damagecount = Math.min(100, p.damagecount + damage);
+            p.attacker = source;
             if (p.health <= 0)
             {
                 p.health = 0;
@@ -257,6 +258,9 @@ public final class Game
         finale = null;
         sound.playLevelMusic(episode, mapn);
         automap.resetLevel();
+        if (status != null) {
+            status.reset(player);
+        }
         System.out.println("Entering E" + episode + "M" + mapn);
     }
 
@@ -435,6 +439,10 @@ public final class Game
         palette = -1;
         keys.clear();
         automap.resetLevel();
+        if (status != null)
+        {
+            status.reset(player);
+        }
         if (player != null)
         {
             player.setMessage("game loaded.");
@@ -611,6 +619,9 @@ public final class Game
         }
         ++leveltime;
         automap.ticker(this);
+        if (status != null) {
+            status.ticker(player);
+        }
     }
 
     public void draw()
