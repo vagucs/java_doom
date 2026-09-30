@@ -2,6 +2,8 @@
 
 ![DOOM rodando em Java CLI com SDL2](screenshot/doom.png)
 
+**Vídeo:** [DOOM rodando em Java — a 180 FPS](https://youtu.be/EbLxJNpGXcE)
+
 DOOM generic portado de Harbour para **Java 17+ CLI + SDL2** (JNA). Não é aplicação web, nem Android, nem libGDX.
 
 Por **Wagner Nunes da Silva**
