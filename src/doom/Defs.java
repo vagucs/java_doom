@@ -1,0 +1,172 @@
+/**
+ * DOOM generic portado de Harbour para Java CLI com SDL2.
+ *
+ * Por Wagner Nunes da Silva
+ *
+ * vagucs@bol.com.br
+ * vagucs@vagucs.com.br
+ * vagucs@gmail.com
+ *
+ * www.vagucs.com.br
+ */
+package doom;
+
+/** Constants from doomdef/doomdata/tables/m_fixed (0-based, like C). */
+public final class Defs
+{
+    private Defs()
+    {
+    }
+
+    public static final int FRACBITS = 16;
+    public static final int FRACUNIT = 65536;
+    public static final int SCREENWIDTH = 320;
+    public static final int SCREENHEIGHT = 200;
+    public static final int SBARHEIGHT = 32;
+    public static final int FINEANGLES = 8192;
+    public static final int FINEMASK = FINEANGLES - 1;
+    public static final int ANGLETOFINESHIFT = 19;
+    public static final int ANG45 = 0x20000000;
+    public static final int ANG90 = 0x40000000;
+    public static final int ANG180 = 0x80000000;
+    public static final int ANG270 = 0xc0000000;
+    public static final int ANG_MAX = 0xffffffff;
+    public static final int SLOPERANGE = 2048;
+    public static final int SLOPEBITS = 11;
+    public static final int DBITS = FRACBITS - SLOPEBITS;
+    public static final int FIELDOFVIEW = 2048;
+    public static final int ML_BLOCKING = 1;
+    public static final int ML_BLOCKMONSTERS = 2;
+    public static final int ML_TWOSIDED = 4;
+    public static final int ML_DONTPEGTOP = 8;
+    public static final int ML_DONTPEGBOTTOM = 16;
+    public static final int ML_SECRET = 32;
+    public static final int ML_SOUNDBLOCK = 64;
+    public static final int ML_DONTDRAW = 128;
+    public static final int ML_MAPPED = 256;
+    public static final int SIL_NONE = 0;
+    public static final int SIL_TOP = 1;
+    public static final int SIL_BOTTOM = 2;
+    public static final int SIL_BOTH = 3;
+    public static final int LIGHTLEVELS = 16;
+    public static final int LIGHTZSHIFT = 20;
+    public static final int MAXLIGHTZ = 128;
+    public static final int LIGHTSCALESHIFT = 12;
+    public static final int MAXLIGHTSCALE = 48;
+    public static final int NUMCOLORMAPS = 32;
+    public static final int MAXDRAWSEGS = 256;
+    public static final int MAPVERTEX_SIZE = 4;
+    public static final int MAPSEG_SIZE = 12;
+    public static final int MAPSUBSECTOR_SIZE = 4;
+    public static final int MAPSECTOR_SIZE = 26;
+    public static final int MAPNODE_SIZE = 28;
+    public static final int MAPTHING_SIZE = 10;
+    public static final int MAPLINEDEF_SIZE = 14;
+    public static final int MAPSIDEDEF_SIZE = 30;
+    public static final int PLAYER_RADIUS = 16 * FRACUNIT;
+    public static final int PLAYER_HEIGHT = 56 * FRACUNIT;
+    public static final int VIEWHEIGHT = 41 * FRACUNIT;
+    public static final int MAXMOVE = 30 * FRACUNIT;
+    public static final int USERANGE = 64 * FRACUNIT;
+    public static final int MELEERANGE = 64 * FRACUNIT;
+    public static final int MISSILERANGE = 32 * 64 * FRACUNIT;
+    public static final int MAXSTEP = 24 * FRACUNIT;
+    public static final int MAXDROP = 24 * FRACUNIT;
+    public static final int GRAVITY = FRACUNIT;
+    public static final int STOPSPEED = 0x1000;
+    public static final int FRICTION = 0xe800;
+    public static final int MAXBOB = 0x100000;
+    public static final int VDOORSPEED = 2 * FRACUNIT;
+    public static final int VDOORWAIT = 150;
+    public static final int PLATSPEED = FRACUNIT;
+    public static final int PLATWAIT = 3;
+    public static final int FLOORSPEED = FRACUNIT;
+    public static final int CEILSPEED = FRACUNIT;
+    public static final int BUTTONTIME = 35;
+    public static final int BOXLEFT = 0;
+    public static final int BOXRIGHT = 1;
+    public static final int BOXBOTTOM = 2;
+    public static final int BOXTOP = 3;
+    public static final int NF_SUBSECTOR = 0x8000;
+    public static final int MF_SPECIAL = 1;
+    public static final int MF_SOLID = 2;
+    public static final int MF_SHOOTABLE = 4;
+    public static final int MF_NOSECTOR = 8;
+    public static final int MF_NOBLOCKMAP = 16;
+    public static final int MF_AMBUSH = 32;
+    public static final int MTF_AMBUSH = 8;
+    public static final int MF_DROPOFF = 0x400;
+    public static final int MF_PICKUP = 0x800;
+    public static final int MF_NOCLIP = 0x1000;
+    public static final int MF_FLOAT = 0x4000;
+    public static final int MF_NOGRAVITY = 0x200;
+    public static final int MF_MISSILE = 0x10000;
+    public static final int MF_CORPSE = 0x40000;
+    public static final int MF_COUNTKILL = 0x400000;
+    public static final int MF_COUNTITEM = 0x800000;
+    public static final int CF_NOCLIP = 1;
+    public static final int CF_GODMODE = 2;
+    public static final int BT_ATTACK = 1;
+    public static final int BT_USE = 2;
+    public static final int BT_CHANGE = 4;
+    public static final int BT_WEAPONMASK = 8 + 16 + 32;
+    public static final int BT_WEAPONSHIFT = 3;
+    public static final int PST_LIVE = 0;
+    public static final int PST_DEAD = 1;
+    public static final int PST_REBORN = 2;
+    public static final int GS_TITLE = 0;
+    public static final int GS_LEVEL = 1;
+    public static final int GS_INTERMISSION = 2;
+    public static final int GS_FINALE = 3;
+    public static final int SK_BABY = 0;
+    public static final int SK_EASY = 1;
+    public static final int SK_MEDIUM = 2;
+    public static final int SK_HARD = 3;
+    public static final int SK_NIGHTMARE = 4;
+    public static final int IT_BLUECARD = 0;
+    public static final int IT_YELLOWCARD = 1;
+    public static final int IT_REDCARD = 2;
+    public static final int IT_BLUESKULL = 3;
+    public static final int IT_YELLOWSKULL = 4;
+    public static final int IT_REDSKULL = 5;
+    public static final int AM_CLIP = 0;
+    public static final int AM_SHELL = 1;
+    public static final int AM_CELL = 2;
+    public static final int AM_MISL = 3;
+    public static final int WP_FIST = 0;
+    public static final int WP_PISTOL = 1;
+    public static final int WP_SHOTGUN = 2;
+    public static final int WP_CHAINGUN = 3;
+    public static final int WP_MISSILE = 4;
+    public static final int WP_PLASMA = 5;
+    public static final int WP_BFG = 6;
+    public static final int WP_CHAINSAW = 7;
+    public static final int WP_SUPERSHOTGUN = 8;
+    public static final int WP_NOCHANGE = 10;
+    public static final int MAXHEALTH = 100;
+    public static final int MAXARMOR = 200;
+    public static final int RESULT_OK = 0;
+    public static final int RESULT_CRUSHED = 1;
+    public static final int RESULT_PASTDEST = 2;
+    public static final int VLD_NORMAL = 0;
+    public static final int VLD_CLOSE30 = 1;
+    public static final int VLD_CLOSE = 2;
+    public static final int VLD_OPEN = 3;
+    public static final int VLD_RAISEIN5 = 4;
+    public static final int VLD_BLAZERAISE = 5;
+    public static final int VLD_BLAZEOPEN = 6;
+    public static final int VLD_BLAZECLOSE = 7;
+    public static final int PLAT_DOWN = 0;
+    public static final int PLAT_UP = 1;
+    public static final int PLAT_WAITING = 2;
+    public static final int PLAT_DWUS = 0;
+    public static final int PLAT_PERPETUAL = 1;
+    public static final int PLAT_BLAZEDWUS = 2;
+    public static final int TICRATE = 35;
+    public static final int HU_FONTSTART = 33;
+    public static final int HU_FONTEND = 95;
+    public static final int HU_FONTSIZE = HU_FONTEND - HU_FONTSTART + 1;
+    public static final int SAVESTRINGSIZE = 24;
+    public static final String SAVEGAMENAME = "doomsav";
+    public static final String LOADSAVEEMPTY = "empty slot";
+}
