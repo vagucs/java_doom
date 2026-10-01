@@ -35,9 +35,11 @@ public class Mobj
     public Object[] info;
     public boolean alive = true;
     public int reactiontime;
+    public int lastlook;
     public Mobj target;
     public int movedir = 8;
     public int movecount;
+    public int threshold;
     public String aiState = "";
     public int frame;
     public int tics;
@@ -47,8 +49,18 @@ public class Mobj
     public int tmx;
     public int tmy;
     public Mobj pickup;
+    public Mobj bnext;
+    public Mobj bprev;
+    public boolean blocklinked;
+    public int bindex = -1;
     public String attackKind = "hitscan";
     public boolean didFire;
+    public String missileKind = "";
+    public Mobj tracer;
+    public boolean easySkip;
+    public int istate;
+    public Object spawnpoint;
+    public int doomednum = -1;
 
     public Mobj()
     {
@@ -56,8 +68,13 @@ public class Mobj
         this.tmy = this.y;
     }
 
+    private static Map<Integer, Object[]> infoCache;
+
     public static Map<Integer, Object[]> infoTable()
     {
+        if (infoCache != null) {
+            return infoCache;
+        }
         int enemy = Defs.MF_SOLID | Defs.MF_SHOOTABLE;
         int special = Defs.MF_SPECIAL;
         int solid = Defs.MF_SOLID;
@@ -66,9 +83,11 @@ public class Mobj
         table.put(9, new Object[] { "SPOSA1", 20, 56, 30, enemy, "enemy", "posit1" });
         table.put(3001, new Object[] { "TROOA1", 20, 56, 60, enemy, "enemy", "bgsit1" });
         table.put(3002, new Object[] { "SARGA1", 30, 56, 150, enemy, "enemy", "sgtsit" });
+        table.put(58, new Object[] { "SARGA1", 30, 56, 150, enemy | Defs.MF_SHADOW, "enemy", "sgtsit" });
+        table.put(65, new Object[] { "CPOSA1", 20, 56, 70, enemy, "enemy", "posit2" });
         table.put(3003, new Object[] { "BOSSA1", 24, 64, 1000, enemy, "enemy", "brssit" });
-        table.put(3005, new Object[] { "HEADA1", 31, 56, 400, enemy, "enemy", "cacsit" });
-        table.put(3006, new Object[] { "SKULA1", 16, 56, 100, enemy, "enemy", "sklatk" });
+        table.put(3005, new Object[] { "HEADA1", 31, 56, 400, enemy | Defs.MF_FLOAT | Defs.MF_NOGRAVITY, "enemy", "cacsit" });
+        table.put(3006, new Object[] { "SKULA1", 16, 56, 100, enemy | Defs.MF_FLOAT | Defs.MF_NOGRAVITY, "enemy", "sklatk" });
         table.put(16, new Object[] { "CYBRA1", 40, 110, 4000, enemy, "enemy", "cybsit" });
         table.put(7, new Object[] { "SPIDA1", 128, 100, 3000, enemy, "enemy", "spisit" });
         table.put(68, new Object[] { "BSPIA1", 64, 64, 500, enemy, "enemy", "bspsit" });
@@ -76,9 +95,12 @@ public class Mobj
         table.put(64, new Object[] { "VILEA1", 20, 56, 700, enemy, "enemy", "vilsit" });
         table.put(66, new Object[] { "SKELA1", 20, 56, 500, enemy, "enemy", "skesit" });
         table.put(67, new Object[] { "FATTA1", 48, 64, 600, enemy, "enemy", "mansit" });
-        table.put(71, new Object[] { "PAINA1", 31, 56, 400, enemy, "enemy", "pesit" });
+        table.put(71, new Object[] { "PAINA1", 31, 56, 400, enemy | Defs.MF_FLOAT | Defs.MF_NOGRAVITY, "enemy", "pesit" });
         table.put(84, new Object[] { "SSWVA1", 20, 56, 50, enemy, "enemy", "posit1" });
-        table.put(72, new Object[] { "KEENA1", 16, 72, 100, enemy, "enemy", "keenpn" });
+        table.put(72, new Object[] { "KEENA1", 16, 72, 100, enemy | Defs.MF_NOGRAVITY, "enemy", "keenpn" });
+        table.put(87, new Object[] { "", 20, 32, 1000, Defs.MF_NOBLOCKMAP | Defs.MF_NOSECTOR, "bosstarget", null });
+        table.put(88, new Object[] { "BBRNA1", 16, 16, 250, enemy, "enemy", "bossit" });
+        table.put(89, new Object[] { "", 20, 32, 1000, Defs.MF_NOBLOCKMAP | Defs.MF_NOSECTOR, "braineye", null });
         table.put(2035, new Object[] { "BAR1A0", 10, 42, 20, enemy, "enemy", null });
         table.put(2011, new Object[] { "STIMA0", 20, 16, 0, special, "health", 10 });
         table.put(2012, new Object[] { "MEDIA0", 20, 16, 0, special, "health", 25 });
@@ -146,9 +168,18 @@ public class Mobj
         table.put(55, new Object[] { "GOR1A0", 16, 16, 0, 0, "deco", null });
         table.put(56, new Object[] { "GOR2A0", 16, 16, 0, 0, "deco", null });
         table.put(57, new Object[] { "GOR3A0", 16, 16, 0, 0, "deco", null });
-        table.put(58, new Object[] { "GOR4A0", 16, 16, 0, 0, "deco", null });
         table.put(59, new Object[] { "GOR5A0", 16, 16, 0, 0, "deco", null });
+        infoCache = table;
         return table;
+    }
+
+    public static void patchHitPoints(int doomed, int hp)
+    {
+        infoTable();
+        Object[] rec = infoCache.get(doomed);
+        if (rec != null) {
+            rec[3] = hp;
+        }
     }
 
     public static int skillBit(int skill)
@@ -161,96 +192,61 @@ public class Mobj
 
     public static int[] spawnMapThings(World world, int skill)
     {
+        return spawnMapThings(world, skill, null);
+    }
+
+    public static int[] spawnMapThings(World world, int skill, Game game)
+    {
         int bit = skillBit(skill);
         int kills = 0;
         int items = 0;
         Map<Integer, Object[]> table = infoTable();
+        boolean nomonsters = game != null && game.nomonsters;
         for (MapThing mt : world.things) {
-            if (mt.type == 14) {
-                int x = mt.x * Defs.FRACUNIT;
-                int y = mt.y * Defs.FRACUNIT;
-                Sector sec = Collision.pointInSubsector(world, x, y).sector;
-                Mobj mo = new Mobj();
-                mo.x = x;
-                mo.y = y;
-                mo.z = sec.floorheight;
-                mo.angle = Compat.asU32(Compat.intdiv(mt.angle, 45) * 0x20000000);
-                mo.radius = 20 * Defs.FRACUNIT;
-                mo.height = 16 * Defs.FRACUNIT;
-                mo.floorz = sec.floorheight;
-                mo.ceilingz = sec.ceilingheight;
-                mo.flags = 0;
-                mo.health = 1000;
-                mo.type = 14;
-                mo.sprite = "";
-                mo.info = new Object[] { "teleport", null };
-                mo.tmx = mo.x;
-                mo.tmy = mo.y;
-                world.mobjs.add(mo);
+            if (mt.type == 11) {
                 continue;
             }
-            if (mt.type == 1 || mt.type == 2 || mt.type == 3 || mt.type == 4
-                || mt.type == 11 || mt.type == 87 || mt.type == 89 || mt.type == 88
-                || (mt.options & bit) == 0
-                || (mt.options & 16) != 0
-                || !table.containsKey(mt.type)) {
+            if (mt.type == 1 || mt.type == 2 || mt.type == 3 || mt.type == 4) {
+                if (mt.type == 1 && game != null && game.player == null) {
+                    game.player = Player.spawnPlayer(world, mt);
+                }
                 continue;
             }
-            Object[] entry = table.get(mt.type);
-            String sprite = (String) entry[0];
-            int rad = (Integer) entry[1];
-            int h = (Integer) entry[2];
-            int health = (Integer) entry[3];
-            int flags = (Integer) entry[4];
-            String kind = (String) entry[5];
-            Object extra = entry[6];
-            if ("enemy".equals(kind) && mt.type != 2035) {
-                flags |= Defs.MF_COUNTKILL;
+            if ((mt.options & bit) == 0 || (mt.options & 16) != 0) {
+                continue;
+            }
+            int typ = Info.mobjTypeForDoomednum(mt.type);
+            if (typ < 0) {
+                continue;
+            }
+            int flags = Info.miInt(typ, Info.MI_FLAGS);
+            if (nomonsters && ((flags & Defs.MF_COUNTKILL) != 0 || typ == Info.MT_SKULL)) {
+                continue;
+            }
+            int z = (flags & Defs.MF_SPAWNCEILING) != 0 ? Thinker.ONCEILINGZ : Thinker.ONFLOORZ;
+            Mobj mo = Thinker.spawnMobj(world, mt.x * Defs.FRACUNIT, mt.y * Defs.FRACUNIT, z, typ, game);
+            if (mo.tics > 0) {
+                mo.tics = 1 + (Enemy.publicRandom() % mo.tics);
+            }
+            mo.angle = Compat.asU32(Compat.intdiv(mt.angle, 45) * 0x20000000);
+            mo.spawnpoint = mt;
+            if ((mt.options & Defs.MTF_AMBUSH) != 0) {
+                mo.flags |= Defs.MF_AMBUSH;
+            }
+            if (table.containsKey(mt.type)) {
+                Object[] entry = table.get(mt.type);
+                mo.info = new Object[] { entry[5], entry[6] };
+            }
+            if ((mo.flags & Defs.MF_COUNTKILL) != 0) {
                 kills++;
-            } else if ("bonus_h".equals(kind) || "bonus_a".equals(kind) || "soul".equals(kind)
-                || "mega".equals(kind) || "berserk".equals(kind)
-                || ("item".equals(kind) && !"Radiation shielding".equals(extra))) {
-                flags |= Defs.MF_COUNTITEM;
+            }
+            if ((mo.flags & Defs.MF_COUNTITEM) != 0) {
                 items++;
             }
-            if ((mt.options & Defs.MTF_AMBUSH) != 0) {
-                flags |= Defs.MF_AMBUSH;
-            }
-            int frame = 0;
-            if (sprite.length() >= 5) {
-                char ch = sprite.charAt(4);
-                if (ch >= 'A' && ch <= ']') {
-                    frame = ch - 65;
-                }
-            }
-            int x = mt.x * Defs.FRACUNIT;
-            int y = mt.y * Defs.FRACUNIT;
-            Sector sec = Collision.pointInSubsector(world, x, y).sector;
-            Mobj mo = new Mobj();
-            mo.x = x;
-            mo.y = y;
-            mo.z = sec.floorheight;
-            mo.angle = Compat.asU32(Compat.intdiv(mt.angle, 45) * 0x20000000);
-            mo.radius = rad * Defs.FRACUNIT;
-            mo.height = h * Defs.FRACUNIT;
-            mo.floorz = sec.floorheight;
-            mo.ceilingz = sec.ceilingheight;
-            mo.flags = flags;
-            mo.health = health != 0 ? health : 1000;
-            mo.type = mt.type;
-            String upper = sprite.toUpperCase();
-            mo.sprite = upper.length() <= 4 ? upper : upper.substring(0, 4);
-            mo.info = new Object[] { kind, extra };
-            mo.aiState = "enemy".equals(kind) ? "look" : "";
-            mo.frame = frame;
-            mo.tics = "enemy".equals(kind) ? 10 : 0;
-            mo.reactiontime = "enemy".equals(kind) ? 8 : 0;
-            mo.tmx = mo.x;
-            mo.tmy = mo.y;
-            world.mobjs.add(mo);
         }
         return new int[] { kills, items };
     }
+
 
     public static boolean giveAmmo(Player p, int ammo, int num)
     {
@@ -271,6 +267,7 @@ public class Mobj
         String kind = (String) pair[0];
         Object extra = pair[1];
         boolean taken = true;
+        String sfx = "itemup";
         if ("health".equals(kind)) {
             if (p.health >= Defs.MAXHEALTH) {
                 taken = false;
@@ -311,9 +308,14 @@ public class Mobj
             p.armortype = 2;
             p.setMessage("MegaSphere!");
         } else if ("berserk".equals(kind)) {
-            p.health = Math.max(p.health, 100);
-            p.mo.health = p.health;
-            p.setMessage("Berserk!");
+            taken = Player.givePower(p, Defs.PW_STRENGTH);
+            if (taken) {
+                if (p.readyweapon != Defs.WP_FIST) {
+                    p.pendingweapon = Defs.WP_FIST;
+                }
+                p.setMessage("Berserk!");
+                sfx = "getpow";
+            }
         } else if ("key".equals(kind)) {
             int extraN = (Integer) extra;
             p.cards[extraN] = true;
@@ -384,13 +386,40 @@ public class Mobj
             }
             p.setMessage("You picked up a backpack full of ammo!");
         } else if ("item".equals(kind)) {
-            p.setMessage(String.valueOf(extra));
+            String extraS = String.valueOf(extra);
+            int pw = -1;
+            String msg = extraS;
+            if ("Invulnerability".equals(extraS)) {
+                pw = Defs.PW_INVULNERABILITY;
+                msg = "Invulnerability!";
+            } else if ("Partial invisibility".equals(extraS)) {
+                pw = Defs.PW_INVISIBILITY;
+                msg = "Partial Invisibility";
+            } else if ("Radiation shielding".equals(extraS)) {
+                pw = Defs.PW_IRONFEET;
+                msg = "Radiation Shielding Suit";
+            } else if ("Computer area map".equals(extraS)) {
+                pw = Defs.PW_ALLMAP;
+                msg = "Computer Area Map";
+            } else if ("Light amplification visor".equals(extraS)) {
+                pw = Defs.PW_INFRARED;
+                msg = "Light Amplification Visor";
+            }
+            if (pw < 0) {
+                p.setMessage(extraS);
+            } else {
+                taken = Player.givePower(p, pw);
+                if (taken) {
+                    p.setMessage(msg);
+                    sfx = "getpow";
+                }
+            }
         } else {
             taken = false;
         }
         if (taken) {
             if (!"weapon".equals(kind)) {
-                game.startSound("itemup");
+                game.startSound(sfx);
             }
             p.bonuscount += 6;
             if ((special.flags & Defs.MF_COUNTITEM) != 0) {

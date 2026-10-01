@@ -11,6 +11,7 @@
  */
 package doom;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -42,7 +43,6 @@ public final class Game
     private static final String[] WEAPON_FIRE_PATCH = {
         null, "PISFA0", "SHTFA0", "CHGFA0", "MISFA0", "PLSFA0", "BFGFA0", null, "SHT2F0",
     };
-    private static final String[] CHEATS = { "iddqd", "idkfa", "idfa", "iddt", "idclip", "idspispopd" };
 
     public Wad wad;
     public Video video;
@@ -62,6 +62,10 @@ public final class Game
     public boolean running = true;
     public boolean showFps;
     public boolean nomonsters;
+    public boolean fastparm;
+    public boolean respawnparm;
+    public boolean respawnmonsters;
+    public Boolean fastOn;
     public boolean fullscreen;
     public boolean crt;
     public String iwadPath = "";
@@ -70,6 +74,23 @@ public final class Game
     public int detailLevel;
     public int screenSize = 7;
     public int mouseSensitivity = 5;
+    public boolean useMouse = true;
+    public int mouseX;
+    public int mouseY;
+    public boolean mouseFire;
+    public boolean nosound;
+    public boolean nomusic;
+    public boolean demoRecording;
+    public boolean demoPlayback;
+    public boolean singledemo;
+    public boolean timingdemo;
+    public int timedemoStart;
+    public int gametic;
+    public String demoName = "";
+    public String recordName;
+    public String playdemoName;
+    public String timedemoName;
+    public final List<String> pwadFiles = new ArrayList<>();
     public int totalkills;
     public int totalitems;
     public int totalsecret;
@@ -81,11 +102,19 @@ public final class Game
     public AmMap automap;
     private int turnheld;
     private byte[] titlePatch;
+    private byte[] creditPatch;
+    private byte[] pagePatch;
+    private int pageTic;
+    private int demoSequence = -1;
+    private boolean advancedemo;
+    private byte[] demoBuffer;
+    private int demoP;
+    private ByteArrayOutputStream demoRecord;
+    private static final int DEMOMARKER = 0x80;
     private int palette = -1;
     private byte[] playpal;
     private Integer wipeState = Defs.GS_TITLE;
     private int nextMapNum = 1;
-    private final Map<String, Integer> cheats = new HashMap<>();
 
     public Game()
     {
@@ -94,10 +123,6 @@ public final class Game
         sound = new Sound();
         wipe = new Wipe();
         automap = new AmMap();
-        for (String sequence : CHEATS)
-        {
-            cheats.put(sequence, 0);
-        }
     }
 
     public void startSound(String name)
@@ -126,6 +151,14 @@ public final class Game
         }
     }
 
+    public void shootSpecial(Line line, Mobj thing)
+    {
+        if (specials != null)
+        {
+            specials.shootSpecial(line, thing);
+        }
+    }
+
     public void damageMobj(Mobj target, Mobj source, int damage)
     {
         damageMobj(target, source, damage, null);
@@ -146,14 +179,25 @@ public final class Game
         if (origin != null && (target.flags & Defs.MF_NOCLIP) == 0 && !skipSaw)
         {
             int angle = Collision.angleTo(origin.x, origin.y, target.x, target.y);
-            int thrust = damage * Compat.intdiv(Defs.FRACUNIT, 8);
+            int mass = Info.miInt(target.type, Info.MI_MASS);
+            if (mass == 0) {
+                mass = 100;
+            }
+            int thrust = (int) (((long) damage * Compat.intdiv(Defs.FRACUNIT, 8) * 100L) / mass);
+            if (damage < 40
+                    && damage > target.health
+                    && target.z - origin.z > 64 * Defs.FRACUNIT
+                    && (Enemy.publicRandom() & 1) != 0) {
+                angle = Compat.asU32(angle + Defs.ANG180);
+                thrust *= 4;
+            }
             target.momx += Compat.fixedMul(thrust, Tables.fineCos(angle));
             target.momy += Compat.fixedMul(thrust, Tables.fineSin(angle));
         }
         if (target.player != null)
         {
             Player p = target.player;
-            if ((p.cheats & Defs.CF_GODMODE) != 0 && damage < 1000)
+            if (((p.cheats & Defs.CF_GODMODE) != 0 || p.powers[Defs.PW_INVULNERABILITY] != 0) && damage < 1000)
             {
                 return;
             }
@@ -183,6 +227,7 @@ public final class Game
             else
             {
                 startSound("plpain");
+                painOrWake(target, source);
             }
             return;
         }
@@ -190,19 +235,29 @@ public final class Game
         if (target.health <= 0)
         {
             Enemy.killMonster(target, this, source);
+            return;
         }
-        else
+        painOrWake(target, source);
+    }
+
+    private void painOrWake(Mobj target, Mobj source)
+    {
+        int painChance = Info.miInt(target.type, Info.MI_PAINCHANCE);
+        if (Enemy.publicRandom() < painChance && (target.flags & Defs.MF_SKULLFLY) == 0)
         {
-            startSound("popain");
-            if (source != null)
-            {
-                target.target = source;
-                if ("".equals(target.aiState) || "look".equals(target.aiState))
-                {
-                    target.aiState = "chase";
-                    target.reactiontime = 0;
-                }
-            }
+            target.flags |= Defs.MF_JUSTHIT;
+            int painState = Info.miInt(target.type, Info.MI_PAINSTATE);
+            if (painState != Info.S_NULL)
+                Thinker.setMobjState(target, painState, world, this);
+        }
+        target.reactiontime = 0;
+        if (source != null && source != target && target.player == null)
+        {
+            target.target = source;
+            int spawnState = Info.miInt(target.type, Info.MI_SPAWNSTATE);
+            int seeState = Info.miInt(target.type, Info.MI_SEESTATE);
+            if (target.istate == spawnState && seeState != Info.S_NULL)
+                Thinker.setMobjState(target, seeState, world, this);
         }
     }
 
@@ -218,15 +273,16 @@ public final class Game
             throw new RuntimeException("resources not initialized");
         }
         Player previous = carry ? player : null;
+        Enemy.clearRandom();
         world = new World();
         world.setupLevel(wad, res, episode, mapn);
         specials = new Specials(world, res, sound);
-        MapThing start = world.playerStart();
-        if (start == null)
+        player = null;
+        int[] counts = Mobj.spawnMapThings(world, skill, this);
+        if (player == null)
         {
             throw new RuntimeException("no player 1 start");
         }
-        player = Player.spawnPlayer(world, start);
         if (previous != null)
         {
             carryPlayer(previous);
@@ -234,8 +290,8 @@ public final class Game
         player.killcount = 0;
         player.itemcount = 0;
         player.secretcount = 0;
-        totalkills = 0;
-        totalitems = 0;
+        totalkills = counts[0];
+        totalitems = counts[1];
         totalsecret = 0;
         for (Sector s : world.sectors)
         {
@@ -244,12 +300,7 @@ public final class Game
                 ++totalsecret;
             }
         }
-        if (!nomonsters)
-        {
-            int[] counts = Mobj.spawnMapThings(world, skill);
-            totalkills = counts[0];
-            totalitems = counts[1];
-        }
+        Thinker.applyFast(this);
         leveltime = 0;
         gamestate = Defs.GS_LEVEL;
         specials.exitRequested = false;
@@ -389,9 +440,21 @@ public final class Game
 
     public void worldDone()
     {
-        if (specials != null && specials.secretExit && player != null)
+        worldDone(false);
+    }
+
+    public void worldDone(boolean fromFinale)
+    {
+        boolean secret = specials != null && specials.secretExit;
+        if (secret && player != null)
         {
             player.didsecret = true;
+        }
+        if (!fromFinale && commercial() && Finale.commercialFinaleMap(mapn, secret))
+        {
+            finale = new Finale(this);
+            gamestate = Defs.GS_FINALE;
+            return;
         }
         mapn = nextMapNum;
         String lump = commercial() ? String.format("MAP%02d", mapn) : ("E" + episode + "M" + mapn);
@@ -410,10 +473,19 @@ public final class Game
 
     public void startNewGame(int skill, int episode, int map)
     {
+        demoPlayback = false;
+        advancedemo = false;
+        demoBuffer = null;
         this.skill = skill;
         this.episode = episode;
         this.mapn = map;
+        fastOn = null;
+        Thinker.applyFast(this);
         loadLevel();
+        if (demoRecording)
+        {
+            beginRecording();
+        }
     }
 
     public boolean saveGame(int slot, String description)
@@ -432,6 +504,9 @@ public final class Game
 
     public boolean loadGame(int slot)
     {
+        demoPlayback = false;
+        advancedemo = false;
+        demoBuffer = null;
         if (!Saveg.readAndRestore(this, slot))
         {
             return false;
@@ -453,17 +528,269 @@ public final class Game
 
     public void returnToTitle()
     {
-        gamestate = Defs.GS_TITLE;
         player = null;
         world = null;
         wi = null;
         finale = null;
         automap.resetLevel();
-        sound.playTitleMusic();
         if (menu != null)
         {
             menu.clear();
         }
+        startTitle();
+    }
+
+    public void startTitle()
+    {
+        demoPlayback = false;
+        demoBuffer = null;
+        demoP = 0;
+        demoSequence = -1;
+        advancedemo = true;
+        doAdvanceDemo();
+    }
+
+    private void pageTicker()
+    {
+        pageTic--;
+        if (pageTic < 0)
+        {
+            advancedemo = true;
+        }
+    }
+
+    private void doAdvanceDemo()
+    {
+        advancedemo = false;
+        demoPlayback = false;
+        demoSequence = (demoSequence + 1) % 6;
+        switch (demoSequence)
+        {
+            case 0:
+                pageTic = commercial() ? Defs.TICRATE * 11 : 170;
+                gamestate = Defs.GS_TITLE;
+                pagePatch = titlePatch;
+                sound.playTitleMusic();
+                break;
+            case 1:
+                if (!playDemo("demo1"))
+                {
+                    advancedemo = true;
+                    doAdvanceDemo();
+                }
+                break;
+            case 2:
+                pageTic = 200;
+                gamestate = Defs.GS_TITLE;
+                pagePatch = creditPatch != null ? creditPatch : titlePatch;
+                break;
+            case 3:
+                if (!playDemo("demo2"))
+                {
+                    advancedemo = true;
+                    doAdvanceDemo();
+                }
+                break;
+            case 4:
+                pageTic = commercial() ? Defs.TICRATE * 11 : 200;
+                gamestate = Defs.GS_TITLE;
+                pagePatch = titlePatch;
+                if (commercial())
+                {
+                    sound.playTitleMusic();
+                }
+                break;
+            default:
+                if (!playDemo("demo3"))
+                {
+                    advancedemo = true;
+                    doAdvanceDemo();
+                }
+                break;
+        }
+    }
+
+    public boolean playDemo(String name)
+    {
+        byte[] data = loadDemoBytes(name);
+        if (data == null || data.length < 13)
+        {
+            return false;
+        }
+        demoBuffer = data;
+        demoP = 0;
+        int demoVersion = Bin.u8(data, demoP++);
+        if (demoVersion <= 4)
+        {
+            demoP = 0;
+        }
+        int demoSkill = Bin.u8(data, demoP++);
+        int demoEpisode = Bin.u8(data, demoP++);
+        int demoMap = Bin.u8(data, demoP++);
+        demoP += 5;
+        demoP += 4;
+        if (demoSkill >= 0 && demoSkill <= 4)
+        {
+            skill = demoSkill;
+        }
+        if (demoEpisode >= 1)
+        {
+            episode = demoEpisode;
+        }
+        if (demoMap >= 1)
+        {
+            mapn = demoMap;
+        }
+        loadLevel(false);
+        demoPlayback = true;
+        if (timingdemo)
+        {
+            timedemoStart = video.ticksMs();
+            gametic = 0;
+        }
+        return true;
+    }
+
+    private byte[] loadDemoBytes(String name)
+    {
+        String[] paths = { name, name + ".lmp" };
+        for (String path : paths)
+        {
+            if (isFile(path))
+            {
+                try
+                {
+                    return Files.readAllBytes(Path.of(path));
+                }
+                catch (Exception e)
+                {
+                    return null;
+                }
+            }
+        }
+        if (wad.checkNumForName(name) < 0)
+        {
+            return null;
+        }
+        return wad.cacheLumpName(name);
+    }
+
+    public void beginRecording()
+    {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write(109);
+        buf.write(skill & 0xff);
+        buf.write(episode & 0xff);
+        buf.write(mapn & 0xff);
+        buf.write(0);
+        buf.write(respawnparm ? 1 : 0);
+        buf.write(fastparm ? 1 : 0);
+        buf.write(nomonsters ? 1 : 0);
+        buf.write(0);
+        buf.write(1);
+        buf.write(0);
+        buf.write(0);
+        buf.write(0);
+        demoRecord = buf;
+        demoP = buf.size();
+        demoRecording = true;
+    }
+
+    public void writeDemoTiccmd(Ticcmd cmd)
+    {
+        if (demoRecord == null)
+        {
+            return;
+        }
+        demoRecord.write(cmd.forwardmove & 0xff);
+        demoRecord.write(cmd.sidemove & 0xff);
+        demoRecord.write((cmd.angleturn >> 8) & 0xff);
+        demoRecord.write(cmd.buttons & 0xff);
+        demoP = demoRecord.size();
+    }
+
+    public void finishRecording()
+    {
+        if (!demoRecording || demoRecord == null)
+        {
+            return;
+        }
+        demoRecord.write(DEMOMARKER);
+        String name = demoName == null || demoName.isEmpty() ? "demo.lmp" : demoName;
+        if (!name.toLowerCase().endsWith(".lmp"))
+        {
+            name = name + ".lmp";
+        }
+        try
+        {
+            Files.write(Path.of(name), demoRecord.toByteArray());
+            System.out.println("Demo " + name + " recorded");
+        }
+        catch (Exception e)
+        {
+            System.out.println("Demo write failed: " + e.getMessage());
+        }
+        demoRecording = false;
+    }
+
+    public void checkDemoStatus()
+    {
+        if (timingdemo)
+        {
+            int now = video.ticksMs();
+            int real = Math.max(1, Compat.intdiv((now - timedemoStart) * Defs.TICRATE, 1000));
+            double fps = (gametic * (double) Defs.TICRATE) / real;
+            System.out.printf("timed %d gametics in %d realtics (%.1f fps)%n", gametic, real, fps);
+            timingdemo = false;
+            demoPlayback = false;
+            running = false;
+            return;
+        }
+        if (demoPlayback)
+        {
+            demoPlayback = false;
+            if (singledemo)
+            {
+                running = false;
+            }
+            else
+            {
+                advancedemo = true;
+            }
+            return;
+        }
+        if (demoRecording)
+        {
+            finishRecording();
+            running = false;
+        }
+    }
+
+    private Ticcmd readDemoTiccmd()
+    {
+        Ticcmd cmd = new Ticcmd();
+        if (demoBuffer == null || demoP + 4 > demoBuffer.length || (demoBuffer[demoP] & 0xff) == DEMOMARKER)
+        {
+            checkDemoStatus();
+            return cmd;
+        }
+        cmd.forwardmove = demoBuffer[demoP++];
+        cmd.sidemove = demoBuffer[demoP++];
+        cmd.angleturn = (demoBuffer[demoP++] & 0xff) << 8;
+        if (cmd.angleturn >= 32768)
+        {
+            cmd.angleturn -= 65536;
+        }
+        cmd.buttons = demoBuffer[demoP++] & 0xff;
+        return cmd;
+    }
+
+    private void beginPlay()
+    {
+        demoPlayback = false;
+        advancedemo = false;
+        demoBuffer = null;
+        loadLevel(false);
     }
 
     private boolean held(int key)
@@ -554,11 +881,50 @@ public final class Game
                 }
             }
         }
+        if (useMouse)
+        {
+            double sens = (mouseSensitivity + 5) / 10.0;
+            int mx = (int) (mouseX * sens);
+            int my = (int) (mouseY * sens);
+            cmd.forwardmove += my;
+            if (cmd.forwardmove > 127)
+            {
+                cmd.forwardmove = 127;
+            }
+            if (cmd.forwardmove < -127)
+            {
+                cmd.forwardmove = -127;
+            }
+            if (strafe)
+            {
+                cmd.sidemove += mx * 2;
+                if (cmd.sidemove > 127)
+                {
+                    cmd.sidemove = 127;
+                }
+                if (cmd.sidemove < -127)
+                {
+                    cmd.sidemove = -127;
+                }
+            }
+            else
+            {
+                cmd.angleturn -= mx * 8;
+            }
+            if (mouseFire)
+            {
+                cmd.buttons |= Defs.BT_ATTACK;
+            }
+            mouseX = 0;
+            mouseY = 0;
+        }
         return cmd;
     }
 
     public void runTic()
     {
+        ++gametic;
+        syncMouseGrab();
         if (wiping)
         {
             if (wipe.tick(1, video.fb))
@@ -572,8 +938,13 @@ public final class Game
             menu.ticker();
         }
         sound.update();
+        if (advancedemo)
+        {
+            doAdvanceDemo();
+        }
         if (gamestate == Defs.GS_TITLE)
         {
+            pageTicker();
             return;
         }
         if (gamestate == Defs.GS_INTERMISSION)
@@ -595,7 +966,14 @@ public final class Game
                 finale.ticker();
                 if (finale.done)
                 {
-                    returnToTitle();
+                    if ("worlddone".equals(finale.action))
+                    {
+                        worldDone(true);
+                    }
+                    else
+                    {
+                        returnToTitle();
+                    }
                 }
             }
             return;
@@ -604,8 +982,28 @@ public final class Game
         {
             return;
         }
-        player.cmd = menu != null && menu.active ? new Ticcmd() : buildTiccmd();
+        if (demoPlayback)
+        {
+            player.cmd = readDemoTiccmd();
+        }
+        else if (menu != null && menu.active)
+        {
+            player.cmd = new Ticcmd();
+        }
+        else
+        {
+            player.cmd = buildTiccmd();
+            if (demoRecording)
+            {
+                writeDemoTiccmd(player.cmd);
+            }
+        }
         Player.playerThink(world, player, this, leveltime);
+        if (player.playerstate == Defs.PST_REBORN)
+        {
+            loadLevel(false);
+            return;
+        }
         Enemy.tickEnemies(world, this);
         if (specials != null)
         {
@@ -665,10 +1063,10 @@ public final class Game
 
     private void drawFrame(int[] fb)
     {
-        if (gamestate == Defs.GS_TITLE && titlePatch != null)
+        if (gamestate == Defs.GS_TITLE && pagePatch != null)
         {
             VVideo.fill(fb, 0);
-            VVideo.drawPatch(fb, 0, 0, titlePatch);
+            VVideo.drawPatch(fb, 0, 0, pagePatch);
             return;
         }
         if (gamestate == Defs.GS_INTERMISSION && wi != null)
@@ -694,11 +1092,14 @@ public final class Game
         {
             Mobj mo = player.mo;
             VVideo.fill(fb, 0);
-            renderer.setupFrame(mo.x, mo.y, player.viewz, mo.angle, player.extralight);
+            renderer.setupFrame(mo.x, mo.y, player.viewz, mo.angle, player.extralight, player.fixedcolormap);
             renderer.render(world, fb);
             Sprites.drawSprites(renderer, world, fb);
             renderer.drawMasked();
-            drawWeapon(fb);
+            if (player.playerstate != Defs.PST_DEAD
+                || player.pspriteSy < Sprites.WEAPONBOTTOM) {
+                drawWeapon(fb);
+            }
         }
         if (status != null && (automap.active || renderer.screenblocks < 11))
         {
@@ -712,13 +1113,26 @@ public final class Game
         Player p = player;
         if (p != null && gamestate == Defs.GS_LEVEL)
         {
-            if (p.damagecount != 0)
+            int cnt = p.damagecount;
+            if (p.powers[Defs.PW_STRENGTH] != 0)
             {
-                next = Math.min(7, (p.damagecount + 7) >> 3) + 1;
+                int bzc = 12 - Compat.intdiv(p.powers[Defs.PW_STRENGTH], 64);
+                if (bzc > cnt)
+                {
+                    cnt = bzc;
+                }
+            }
+            if (cnt != 0)
+            {
+                next = Math.min(7, (cnt + 7) >> 3) + 1;
             }
             else if (p.bonuscount != 0)
             {
                 next = Math.min(3, (p.bonuscount + 7) >> 3) + 9;
+            }
+            else if (p.powers[Defs.PW_IRONFEET] > 4 * 32 || (p.powers[Defs.PW_IRONFEET] & 8) != 0)
+            {
+                next = Defs.RADIATIONPAL;
             }
         }
         if (next == palette)
@@ -813,6 +1227,50 @@ public final class Game
         startSound("stnmov");
     }
 
+    private void syncMouseGrab()
+    {
+        boolean want = useMouse && gamestate == Defs.GS_LEVEL && !demoPlayback && !(menu != null && menu.active);
+        video.setRelativeMouse(want);
+    }
+
+    public void handleEvent(GameEvent ev)
+    {
+        if (ev == null)
+        {
+            return;
+        }
+        if ("mousemotion".equals(ev.type))
+        {
+            if (useMouse)
+            {
+                mouseX += ev.dx;
+                mouseY += -ev.dy;
+            }
+            return;
+        }
+        if ("mousedown".equals(ev.type))
+        {
+            if (ev.button == 1)
+            {
+                mouseFire = true;
+                if (finale != null && gamestate == Defs.GS_FINALE)
+                {
+                    finale.responder();
+                }
+            }
+            return;
+        }
+        if ("mouseup".equals(ev.type))
+        {
+            if (ev.button == 1)
+            {
+                mouseFire = false;
+            }
+            return;
+        }
+        handleEvent(ev.type, ev.key, ev.text != null ? ev.text : "");
+    }
+
     public void handleEvent(String type, int key, String unicodeChar)
     {
         if (unicodeChar == null)
@@ -821,6 +1279,10 @@ public final class Game
         }
         if ("quit".equals(type))
         {
+            if (demoRecording)
+            {
+                finishRecording();
+            }
             running = false;
             return;
         }
@@ -834,6 +1296,11 @@ public final class Game
             {
                 video.toggleFullscreen();
                 fullscreen = video.fullscreen;
+                return;
+            }
+            keys.put(key, true);
+            if (finale != null && gamestate == Defs.GS_FINALE && finale.responder())
+            {
                 return;
             }
             if (menu != null && menu.responder(key, unicodeChar))
@@ -853,14 +1320,13 @@ public final class Game
                 }
                 return;
             }
-            keys.put(key, true);
-            if ((key == Keys.RETURN || key == Keys.KP_ENTER) && gamestate == Defs.GS_TITLE)
-            {
-                loadLevel();
-            }
-            else if (key == Keys.F11)
+            if (key == Keys.F11)
             {
                 video.showFps = !video.showFps;
+            }
+            else if (demoPlayback || gamestate == Defs.GS_TITLE)
+            {
+                beginPlay();
             }
             else
             {
@@ -876,7 +1342,7 @@ public final class Game
 
     private void feedCheat(String input)
     {
-        if (gamestate != Defs.GS_LEVEL || player == null || skill == Defs.SK_NIGHTMARE)
+        if (gamestate != Defs.GS_LEVEL || player == null)
         {
             return;
         }
@@ -886,53 +1352,77 @@ public final class Game
             return;
         }
         char letter = ch.charAt(0);
-        if (letter < 'a' || letter > 'z')
+        if (!((letter >= 'a' && letter <= 'z') || (letter >= '0' && letter <= '9')))
         {
             return;
         }
-        for (String sequence : CHEATS)
+        boolean nightmare = skill == Defs.SK_NIGHTMARE;
+        for (Deh.CheatSeq cheat : Deh.INSTANCE.cheats)
         {
-            int position = cheats.get(sequence);
-            if (position < sequence.length() && letter == sequence.charAt(position))
+            String param = cheat.feed(ch);
+            if (param == null)
             {
-                ++position;
-                if (position >= sequence.length())
-                {
-                    cheats.put(sequence, 0);
-                    switch (sequence)
-                    {
-                        case "iddqd":
-                            cheatGod();
-                            break;
-                        case "idkfa":
-                            cheatAmmo(true);
-                            break;
-                        case "idfa":
-                            cheatAmmo(false);
-                            break;
-                        case "iddt":
-                            if (automap.active)
-                            {
-                                automap.cycleIddt();
-                            }
-                            break;
-                        case "idclip":
-                        case "idspispopd":
-                            cheatNoclip();
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                else
-                {
-                    cheats.put(sequence, position);
-                }
+                continue;
             }
-            else
+            if (nightmare && !"clev".equals(cheat.action) && !"iddt".equals(cheat.action))
             {
-                cheats.put(sequence, letter == sequence.charAt(0) ? 1 : 0);
+                continue;
             }
+            doCheat(cheat.action, param);
+        }
+    }
+
+    private void doCheat(String action, String param)
+    {
+        switch (action)
+        {
+            case "god":
+                cheatGod();
+                break;
+            case "kfa":
+                cheatAmmo(true);
+                break;
+            case "fa":
+                cheatAmmo(false);
+                break;
+            case "noclip":
+            case "noclip2":
+                cheatNoclip();
+                break;
+            case "iddt":
+                if (automap.active)
+                {
+                    automap.cycleIddt();
+                }
+                break;
+            case "behold":
+                player.setMessage("invin visis rad allmap lite amp");
+                break;
+            case "beholdv":
+            case "beholds":
+            case "beholdi":
+            case "beholdr":
+            case "beholda":
+            case "beholdl":
+                cheatBehold("vsiral".indexOf(action.charAt(6)));
+                break;
+            case "choppers":
+                player.weaponowned[Defs.WP_CHAINSAW] = true;
+                player.pendingweapon = Defs.WP_CHAINSAW;
+                player.powers[Defs.PW_INVULNERABILITY] = 1;
+                player.setMessage("... doesn't suck - GM");
+                break;
+            case "mypos":
+                player.setMessage(String.format("ang=0x%x;x,y=(0x%x,0x%x)", player.mo.angle, player.mo.x, player.mo.y));
+                break;
+            case "clev":
+                cheatClev(param);
+                break;
+            case "mus":
+                cheatMus(param);
+                break;
+            default:
+                break;
         }
     }
 
@@ -942,8 +1432,8 @@ public final class Game
         p.cheats ^= Defs.CF_GODMODE;
         if ((p.cheats & Defs.CF_GODMODE) != 0)
         {
-            p.health = 100;
-            p.mo.health = 100;
+            p.health = Deh.INSTANCE.godModeHealth;
+            p.mo.health = Deh.INSTANCE.godModeHealth;
             p.setMessage("Degreelessness Mode On");
         }
         else
@@ -955,9 +1445,10 @@ public final class Game
     private void cheatAmmo(boolean giveKeys)
     {
         Player p = player;
-        p.armorpoints = 200;
-        p.armortype = 2;
+        p.armorpoints = giveKeys ? Deh.INSTANCE.idkfaArmor : Deh.INSTANCE.idfaArmor;
+        p.armortype = giveKeys ? Deh.INSTANCE.idkfaArmorClass : Deh.INSTANCE.idfaArmorClass;
         Arrays.fill(p.weaponowned, true);
+        p.maxammo = Deh.INSTANCE.maxammo.clone();
         for (int i = 0; i < p.ammo.length; ++i)
         {
             p.ammo[i] = p.maxammo[i];
@@ -984,16 +1475,118 @@ public final class Game
         p.setMessage((p.cheats & Defs.CF_NOCLIP) != 0 ? "No Clipping Mode ON" : "No Clipping Mode OFF");
     }
 
+    private void cheatBehold(int pw)
+    {
+        if (pw < 0)
+        {
+            return;
+        }
+        Player p = player;
+        if (p.powers[pw] == 0)
+        {
+            Player.givePower(p, pw);
+            if (pw == Defs.PW_STRENGTH && p.readyweapon != Defs.WP_FIST)
+            {
+                p.pendingweapon = Defs.WP_FIST;
+            }
+        }
+        else if (pw == Defs.PW_STRENGTH)
+        {
+            p.powers[pw] = 0;
+        }
+        else
+        {
+            p.powers[pw] = 1;
+        }
+        p.setMessage("Power-up Toggled");
+    }
+
+    private void cheatClev(String param)
+    {
+        if (param.length() < 2 || !Character.isDigit(param.charAt(0)) || !Character.isDigit(param.charAt(1)))
+        {
+            return;
+        }
+        int a = param.charAt(0) - '0';
+        int b = param.charAt(1) - '0';
+        int episode;
+        int map;
+        String lump;
+        if (commercial())
+        {
+            episode = 1;
+            map = a * 10 + b;
+            lump = String.format("MAP%02d", map);
+        }
+        else
+        {
+            episode = a;
+            map = b;
+            lump = "E" + episode + "M" + map;
+        }
+        if (episode < 1 || map < 1 || wad.checkNumForName(lump) < 0)
+        {
+            return;
+        }
+        player.setMessage("Changing Level...");
+        startNewGame(skill, episode, map);
+    }
+
+    private void cheatMus(String param)
+    {
+        if (param.length() < 2 || !Character.isDigit(param.charAt(0)) || !Character.isDigit(param.charAt(1)))
+        {
+            return;
+        }
+        int a = param.charAt(0) - '0';
+        int b = param.charAt(1) - '0';
+        String name;
+        if (commercial())
+        {
+            int map = a * 10 + b;
+            String[] tracks = Sound.doom2Music();
+            if (map < 1 || map > tracks.length)
+            {
+                player.setMessage("IMPOSSIBLE SELECTION");
+                return;
+            }
+            name = tracks[map - 1];
+        }
+        else
+        {
+            if (a < 1 || b < 1 || b > 9)
+            {
+                player.setMessage("IMPOSSIBLE SELECTION");
+                return;
+            }
+            name = "e" + a + "m" + b;
+        }
+        if (!sound.hasMusic(name))
+        {
+            player.setMessage("IMPOSSIBLE SELECTION");
+            return;
+        }
+        sound.changeMusic(name, true);
+        player.setMessage("Music Change");
+    }
+
     public static int main(String[] args)
     {
         try
         {
             Game game = new Game();
+            Config.load(game);
             String iwad = parseArgs(args, game);
             String iwadPath = findIwad(iwad);
             game.iwadPath = iwadPath;
             System.out.println("IWAD: " + iwadPath);
             game.wad.addFile(iwadPath);
+            for (String extra : game.pwadFiles)
+            {
+                System.out.println("PWAD: " + extra);
+                game.wad.addFile(extra);
+            }
+            Deh.INSTANCE.loadAfterIwad(game.wad, iwadPath);
             Tables.initTables();
             game.res = new Resources(game.wad);
             game.res.init();
@@ -1004,6 +1597,15 @@ public final class Game
             game.video.crt = game.crt;
             game.playpal = game.wad.cacheLumpName("PLAYPAL");
             game.video.setPalette(game.playpal);
+            if (game.nosound)
+            {
+                game.sound.enabled = false;
+                game.sound.musicEnabled = false;
+            }
+            if (game.nomusic)
+            {
+                game.sound.musicEnabled = false;
+            }
             game.sound.init(game.wad);
             game.sound.output = game.video;
             game.menu = new Menu(game.wad, game.sound, game);
@@ -1011,6 +1613,11 @@ public final class Game
             {
                 game.titlePatch = game.wad.cacheLumpName("TITLEPIC");
             }
+            if (game.wad.checkNumForName("CREDIT") >= 0)
+            {
+                game.creditPatch = game.wad.cacheLumpName("CREDIT");
+            }
+            game.pagePatch = game.titlePatch;
             game.status = new Status(game.wad);
             boolean warp = false;
             for (String arg : args)
@@ -1021,14 +1628,40 @@ public final class Game
                     break;
                 }
             }
-            if (warp)
+            if (game.recordName != null)
+            {
+                game.demoName = game.recordName;
+                game.demoRecording = true;
+                game.startNewGame(game.skill, game.episode, game.mapn);
+            }
+            else if (game.timedemoName != null)
+            {
+                game.timingdemo = true;
+                game.singledemo = true;
+                if (!game.playDemo(game.timedemoName))
+                {
+                    System.out.println("timedemo not found: " + game.timedemoName);
+                    game.video.shutdown();
+                    return 1;
+                }
+            }
+            else if (game.playdemoName != null)
+            {
+                game.singledemo = true;
+                if (!game.playDemo(game.playdemoName))
+                {
+                    System.out.println("playdemo not found: " + game.playdemoName);
+                    game.video.shutdown();
+                    return 1;
+                }
+            }
+            else if (warp)
             {
                 game.loadLevel();
             }
             else
             {
-                game.startSound("swtchn");
-                game.sound.playTitleMusic();
+                game.startTitle();
             }
             double tickMs = 1000.0 / Defs.TICRATE;
             double accum = 0;
@@ -1037,23 +1670,34 @@ public final class Game
             {
                 for (GameEvent event : game.video.pollEvents())
                 {
-                    String text = event.text != null ? event.text : "";
-                    game.handleEvent(event.type, event.key, text);
+                    game.handleEvent(event);
                 }
                 int now = game.video.ticksMs();
                 accum += now - last;
                 last = now;
-                while (accum >= tickMs)
+                if (game.timingdemo)
                 {
                     game.runTic();
-                    accum -= tickMs;
+                }
+                else
+                {
+                    while (accum >= tickMs)
+                    {
+                        game.runTic();
+                        accum -= tickMs;
+                    }
                 }
                 game.draw();
-                if (accum < tickMs / 2)
+                if (!game.timingdemo && accum < tickMs / 2)
                 {
                     usleep(1);
                 }
             }
+            if (game.demoRecording)
+            {
+                game.finishRecording();
+            }
+            Config.save(game);
             game.sound.stopMusic();
             game.video.shutdown();
             return 0;
@@ -1097,6 +1741,14 @@ public final class Game
             {
                 game.nomonsters = true;
             }
+            else if ("-fast".equals(arg))
+            {
+                game.fastparm = true;
+            }
+            else if ("-respawn".equals(arg))
+            {
+                game.respawnparm = true;
+            }
             else if ("-warp".equals(arg) && i + 2 < argv.length)
             {
                 game.episode = parseIntOrZero(argv[++i]);
@@ -1113,6 +1765,52 @@ public final class Game
             else if ("-crt".equals(arg))
             {
                 game.crt = true;
+            }
+            else if ("-deh".equals(arg))
+            {
+                while (i + 1 < argv.length && !argv[i + 1].startsWith("-"))
+                {
+                    Deh.INSTANCE.files.add(argv[++i]);
+                }
+            }
+            else if ("-nodeh".equals(arg))
+            {
+                Deh.INSTANCE.nodeh = true;
+            }
+            else if ("-dehlump".equals(arg))
+            {
+                Deh.INSTANCE.dehlump = true;
+            }
+            else if ("-nocheats".equals(arg))
+            {
+                Deh.INSTANCE.applyCheats = false;
+            }
+            else if ("-file".equals(arg))
+            {
+                while (i + 1 < argv.length && !argv[i + 1].startsWith("-"))
+                {
+                    game.pwadFiles.add(argv[++i]);
+                }
+            }
+            else if ("-record".equals(arg) && i + 1 < argv.length)
+            {
+                game.recordName = argv[++i];
+            }
+            else if ("-playdemo".equals(arg) && i + 1 < argv.length)
+            {
+                game.playdemoName = argv[++i];
+            }
+            else if ("-timedemo".equals(arg) && i + 1 < argv.length)
+            {
+                game.timedemoName = argv[++i];
+            }
+            else if ("-nosound".equals(arg))
+            {
+                game.nosound = true;
+            }
+            else if ("-nomusic".equals(arg))
+            {
+                game.nomusic = true;
             }
             else if (!arg.startsWith("-") && arg.toLowerCase().endsWith(".wad"))
             {

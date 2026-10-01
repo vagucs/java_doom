@@ -14,6 +14,10 @@ package doom;
 public final class CeilingMove
 {
     public boolean dead;
+    public boolean crush;
+    public int ctype;
+    public int topheight;
+    public int bottomheight;
     public Sector sector;
     public int direction;
     public int dest;

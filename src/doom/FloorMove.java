@@ -14,6 +14,8 @@ package doom;
 public final class FloorMove
 {
     public boolean dead;
+    public boolean crush;
+    public Integer floorpic;
     public Sector sector;
     public int direction;
     public int dest;

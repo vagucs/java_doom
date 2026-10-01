@@ -29,6 +29,8 @@ public interface Sdl2 extends Library
 
     int SDL_ShowCursor(int toggle);
 
+    int SDL_SetRelativeMouseMode(int enabled);
+
     Pointer SDL_CreateWindow(String title, int x, int y, int w, int h, int flags);
 
     void SDL_DestroyWindow(Pointer window);

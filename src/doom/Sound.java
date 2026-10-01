@@ -35,6 +35,7 @@ public final class Sound
     private Sequencer sequencer;
     public Video output;
     public boolean enabled = true;
+    public boolean musicEnabled = true;
     public int sfxVolume = 8;
     public int musicVolume = 8;
 
@@ -100,9 +101,23 @@ public final class Sound
         changeMusic(name, true);
     }
 
+    public static String[] doom2Music()
+    {
+        return DOOM2_MUSIC;
+    }
+
+    public boolean hasMusic(String name)
+    {
+        if (wad == null || name == null || name.isEmpty()) {
+            return false;
+        }
+        String lump = name.length() > 6 ? name.substring(0, 6) : name;
+        return wad.checkNumForName("D_" + lump.toUpperCase()) >= 0;
+    }
+
     public void changeMusic(String name, boolean looping)
     {
-        if (wad == null || name.isEmpty() || name.toLowerCase().equals(musicName)) {
+        if (!musicEnabled || wad == null || name.isEmpty() || name.toLowerCase().equals(musicName)) {
             return;
         }
         String lump = name.length() > 6 ? name.substring(0, 6) : name;

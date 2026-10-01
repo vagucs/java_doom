@@ -23,6 +23,7 @@ public final class Keys
     public static final int SPACE = 32;
     public static final int BACKSPACE = 8;
 
+    public static final int F1 = 0x4000003a;
     public static final int F2 = 0x4000003d;
     public static final int F3 = 0x4000003e;
     public static final int F11 = 0x40000044;

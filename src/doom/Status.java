@@ -240,7 +240,7 @@ public final class Status
             }
         }
 
-        if (facePriority < 5 && (player.cheats & Defs.CF_GODMODE) != 0) {
+        if (facePriority < 5 && ((player.cheats & Defs.CF_GODMODE) != 0 || player.powers[Defs.PW_INVULNERABILITY] != 0)) {
             facePriority = 4;
             faceIndex = ST_GODFACE;
             faceCount = 1;

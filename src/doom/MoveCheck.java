@@ -22,4 +22,6 @@ public class MoveCheck
     public List<Line> spechit = new ArrayList<>();
     public boolean blocked;
     public Mobj hitThing;
+    public Line ceilingline;
+    public int[] bbox = new int[4];
 }

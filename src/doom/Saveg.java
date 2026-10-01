@@ -584,6 +584,9 @@ public final class Saveg
             throw new RuntimeException("save has no player");
         }
         world.mobjs = mobjs;
+        for (Mobj linked : mobjs) {
+            Collision.setThingPosition(world, linked);
+        }
         game.gamestate = Defs.GS_LEVEL;
         game.sound.playLevelMusic(game.episode, game.mapn);
     }

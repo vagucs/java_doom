@@ -63,6 +63,7 @@ public final class Renderer
     public int viewcos;
     public int viewsin;
     public int extralight;
+    public byte[] fixedcolormap;
     private Seg curline;
     private Sector frontsector;
     private Sector backsector;
@@ -322,6 +323,11 @@ public final class Renderer
 
     public void setupFrame(int x, int y, int z, int angle, int extraLight)
     {
+        this.setupFrame(x, y, z, angle, extraLight, 0);
+    }
+
+    public void setupFrame(int x, int y, int z, int angle, int extraLight, int fixedcolormap)
+    {
         this.viewx = x;
         this.viewy = y;
         this.viewz = z;
@@ -329,6 +335,7 @@ public final class Renderer
         this.viewsin = Tables.fineSin(this.viewangle);
         this.viewcos = Tables.fineCos(this.viewangle);
         this.extralight = extraLight;
+        this.fixedcolormap = fixedcolormap != 0 ? this.res.colormap(fixedcolormap) : null;
         int ang = Compat.ushr(Compat.asU32(this.viewangle - Defs.ANG90), Defs.ANGLETOFINESHIFT) & Defs.FINEMASK;
         this.basexscale = Compat.fixedDiv(
             Tables.finesine[(ang + Compat.intdiv(Defs.FINEANGLES, 4)) & Defs.FINEMASK],
@@ -847,7 +854,7 @@ public final class Renderer
                 int tan = Tables.finetangent[angle & (Compat.intdiv(Defs.FINEANGLES, 2) - 1)];
                 texturecolumn = Compat.shar(this.rw_offset - Compat.fixedMul(tan, this.rw_distance), Defs.FRACBITS);
                 int index = Math.min(Defs.MAXLIGHTSCALE - 1, Compat.ushr(this.rw_scale, Defs.LIGHTSCALESHIFT));
-                this.dc_colormap = this.res.colormap(this.walllights[index]);
+                this.dc_colormap = this.fixedcolormap != null ? this.fixedcolormap : this.res.colormap(this.walllights[index]);
                 this.dc_x = this.rw_x;
                 this.dc_iscale = this.rw_scale != 0 ? unsignedDiv32(this.rw_scale) : 0;
             }
@@ -1000,7 +1007,7 @@ public final class Renderer
             }
             int index = spryscale > 0 ? Compat.ushr(spryscale, Defs.LIGHTSCALESHIFT) : 0;
             index = Math.min(Defs.MAXLIGHTSCALE - 1, index);
-            this.dc_colormap = this.res.colormap(walllights[index]);
+            this.dc_colormap = this.fixedcolormap != null ? this.fixedcolormap : this.res.colormap(walllights[index]);
             this.dc_x = x;
             this.dc_iscale = spryscale != 0 ? unsignedDiv32(spryscale) : 0;
             this.dc_texturemid = texturemid;
@@ -1094,7 +1101,7 @@ public final class Renderer
                         + Compat.fixedMul(Tables.finesine[(ang + Compat.intdiv(Defs.FINEANGLES, 4)) & Defs.FINEMASK], length);
                     int yfrac = -this.viewy - Compat.fixedMul(Tables.finesine[ang], length);
                     int index = Math.min(Defs.MAXLIGHTZ - 1, Compat.ushr(distance, Defs.LIGHTZSHIFT));
-                    byte[] cm = this.res.colormap(planezlight[index]);
+                    byte[] cm = this.fixedcolormap != null ? this.fixedcolormap : this.res.colormap(planezlight[index]);
                     int spot = ((xfrac >> 16) & 63) | ((yfrac >> 10) & 0x0fc0);
                     int source = spot < flat.length ? flat[spot] & 0xff : 0;
                     int pix = cm[source] & 0xff;

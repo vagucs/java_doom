@@ -55,6 +55,7 @@ public final class Player
     public int bonuscount;
     public Mobj attacker;
     public int extralight;
+    public int fixedcolormap;
     public int refire;
     public int killcount;
     public int itemcount;
@@ -68,6 +69,7 @@ public final class Player
     public String pspriteBody = "";
     public String pspriteFlash = "";
     public int flashTics;
+    public int[] powers = new int[6];
 
     public Player()
     {
@@ -88,8 +90,46 @@ public final class Player
 
     public void setMessage(String text)
     {
-        message = text;
+        message = Deh.string(text);
         messageTics = 4 * Defs.TICRATE;
+    }
+
+    public static boolean givePower(Player p, int power)
+    {
+        if (power == Defs.PW_INVULNERABILITY) {
+            p.powers[power] = Defs.INVULNTICS;
+            return true;
+        }
+        if (power == Defs.PW_INVISIBILITY) {
+            p.powers[power] = Defs.INVISTICS;
+            if (p.mo != null) {
+                p.mo.flags |= Defs.MF_SHADOW;
+            }
+            return true;
+        }
+        if (power == Defs.PW_INFRARED) {
+            p.powers[power] = Defs.INFRATICS;
+            return true;
+        }
+        if (power == Defs.PW_IRONFEET) {
+            p.powers[power] = Defs.IRONTICS;
+            return true;
+        }
+        if (power == Defs.PW_STRENGTH) {
+            if (p.health < Defs.MAXHEALTH) {
+                p.health = Math.min(Defs.MAXHEALTH, p.health + 100);
+                if (p.mo != null) {
+                    p.mo.health = p.health;
+                }
+            }
+            p.powers[power] = 1;
+            return true;
+        }
+        if (p.powers[power] != 0) {
+            return false;
+        }
+        p.powers[power] = 1;
+        return true;
     }
 
     public static Player spawnPlayer(World world, MapThing start)
@@ -111,11 +151,17 @@ public final class Player
         mo.ceilingz = sec.ceilingheight;
         Player p = new Player(mo, cheats);
         mo.player = p;
+        p.health = Deh.INSTANCE.initialHealth;
+        mo.health = Deh.INSTANCE.initialHealth;
+        p.ammo = new int[] {Deh.INSTANCE.initialBullets, 0, 0, 0};
+        p.maxammo = Deh.INSTANCE.maxammo.clone();
         if ((cheats & 1) != 0) {
             mo.flags |= Defs.MF_NOCLIP;
         }
         p.viewz = mo.z + Defs.VIEWHEIGHT;
+        mo.lastlook = Enemy.publicRandom() % 4;
         world.mobjs.add(mo);
+        Collision.setThingPosition(world, mo);
         return p;
     }
 
@@ -163,36 +209,12 @@ public final class Player
 
     public static void xyMovement(World world, Mobj mo, Game game)
     {
-        if (mo.momx == 0 && mo.momy == 0) {
-            return;
-        }
-        Collision.slideMove(world, mo, mo.momx, mo.momy, game);
-        if (mo.player != null
-                && Math.abs(mo.momx) < Defs.STOPSPEED
-                && Math.abs(mo.momy) < Defs.STOPSPEED
-                && mo.player.cmd.forwardmove == 0
-                && mo.player.cmd.sidemove == 0) {
-            mo.momx = 0;
-            mo.momy = 0;
-            return;
-        }
-        mo.momx = Compat.fixedMul(mo.momx, Defs.FRICTION);
-        mo.momy = Compat.fixedMul(mo.momy, Defs.FRICTION);
+        Enemy.pXyMovement(world, mo, game);
     }
 
-    public static void zMovement(Mobj mo)
+    public static void zMovement(Mobj mo, World world, Game game)
     {
-        mo.z += mo.momz;
-        if (mo.z <= mo.floorz) {
-            mo.z = mo.floorz;
-            mo.momz = 0;
-        } else {
-            mo.momz -= Defs.GRAVITY;
-        }
-        if (mo.z + mo.height > mo.ceilingz) {
-            mo.z = mo.ceilingz - mo.height;
-            mo.momz = 0;
-        }
+        Enemy.mobjZ(mo, world, game);
     }
 
     private static void specialSector(World world, Player p, Game game, int time)
@@ -208,7 +230,11 @@ public final class Player
             return;
         }
         int sp = sec.special;
-        if ((sp == 5 || sp == 7 || sp == 4 || sp == 16 || sp == 11) && (time & 0x1f) == 0) {
+        if (sp == 5 || sp == 7 || sp == 4 || sp == 16 || sp == 11) {
+            if (p.powers[Defs.PW_IRONFEET] != 0) {
+                return;
+            }
+            if ((time & 0x1f) == 0) {
             int damage;
             if (sp == 7) {
                 damage = 5;
@@ -221,6 +247,45 @@ public final class Player
             if (sp == 11 && p.health <= 10 && game.specials != null) {
                 game.specials.exitRequested = true;
             }
+            }
+        }
+    }
+
+    private static void deathThink(World world, Player p, Game game, int leveltime)
+    {
+        Mobj mo = p.mo;
+        Ticcmd cmd = p.cmd;
+        if (p.viewheight > 6 * Defs.FRACUNIT) {
+            p.viewheight -= Defs.FRACUNIT;
+        }
+        if (p.viewheight < 6 * Defs.FRACUNIT) {
+            p.viewheight = 6 * Defs.FRACUNIT;
+        }
+        p.deltaviewheight = 0;
+        Player.xyMovement(world, mo, game);
+        Player.zMovement(mo, world, game);
+        Player.calcHeight(p, leveltime);
+        if (p.attacker != null && p.attacker != mo) {
+            int angle = Collision.angleTo(mo.x, mo.y, p.attacker.x, p.attacker.y);
+            int delta = Compat.asU32(angle - mo.angle);
+            int ang5 = Defs.ANG90 / 18;
+            if (Integer.compareUnsigned(delta, ang5) < 0
+                || Integer.compareUnsigned(delta, Compat.asU32(-ang5)) > 0) {
+                mo.angle = angle;
+                if (p.damagecount != 0) {
+                    p.damagecount--;
+                }
+            } else if (Integer.compareUnsigned(delta, Defs.ANG180) < 0) {
+                mo.angle = Compat.asU32(mo.angle + ang5);
+            } else {
+                mo.angle = Compat.asU32(mo.angle - ang5);
+            }
+        } else if (p.damagecount != 0) {
+            p.damagecount--;
+        }
+        Player.weaponThink(p, game);
+        if ((cmd.buttons & Defs.BT_USE) != 0) {
+            p.playerstate = Defs.PST_REBORN;
         }
     }
 
@@ -229,17 +294,7 @@ public final class Player
         Mobj mo = p.mo;
         Ticcmd cmd = p.cmd;
         if (p.playerstate == Defs.PST_DEAD) {
-            if (p.viewheight > 6 * Defs.FRACUNIT) {
-                p.viewheight -= Defs.FRACUNIT;
-            }
-            Player.calcHeight(p, leveltime);
-            if ((cmd.buttons & Defs.BT_USE) != 0) {
-                p.playerstate = Defs.PST_LIVE;
-                p.health = 100;
-                mo.health = 100;
-                mo.alive = true;
-                mo.flags |= Defs.MF_SHOOTABLE | Defs.MF_SOLID;
-            }
+            Player.deathThink(world, p, game, leveltime);
             return;
         }
         mo.angle = Compat.asU32(mo.angle + (cmd.angleturn << 16));
@@ -252,7 +307,7 @@ public final class Player
             }
         }
         Player.xyMovement(world, mo, game);
-        Player.zMovement(mo);
+        Player.zMovement(mo, world, game);
         Player.calcHeight(p, leveltime);
         Player.specialSector(world, p, game, leveltime);
         if ((cmd.buttons & Defs.BT_USE) != 0) {
@@ -270,6 +325,33 @@ public final class Player
             }
         }
         Player.weaponThink(p, game);
+        if (p.powers[Defs.PW_STRENGTH] != 0) {
+            p.powers[Defs.PW_STRENGTH]++;
+        }
+        if (p.powers[Defs.PW_INVULNERABILITY] != 0) {
+            p.powers[Defs.PW_INVULNERABILITY]--;
+        }
+        if (p.powers[Defs.PW_INVISIBILITY] != 0) {
+            p.powers[Defs.PW_INVISIBILITY]--;
+            if (p.powers[Defs.PW_INVISIBILITY] == 0 && p.mo != null) {
+                p.mo.flags &= ~Defs.MF_SHADOW;
+            }
+        }
+        if (p.powers[Defs.PW_INFRARED] != 0) {
+            p.powers[Defs.PW_INFRARED]--;
+        }
+        if (p.powers[Defs.PW_IRONFEET] != 0) {
+            p.powers[Defs.PW_IRONFEET]--;
+        }
+        int inv = p.powers[Defs.PW_INVULNERABILITY];
+        int ir = p.powers[Defs.PW_INFRARED];
+        if (inv != 0) {
+            p.fixedcolormap = (inv > 4 * 32 || (inv & 8) != 0) ? Defs.INVERSECOLORMAP : 0;
+        } else if (ir != 0) {
+            p.fixedcolormap = (ir > 4 * 32 || (ir & 8) != 0) ? 1 : 0;
+        } else {
+            p.fixedcolormap = 0;
+        }
         if (p.damagecount != 0) {
             p.damagecount--;
         }
@@ -379,10 +461,15 @@ public final class Player
 
     private static void weaponThink(Player p, Game game)
     {
+        if (p.playerstate == Defs.PST_DEAD || p.health <= 0) {
+            Player.lowerWeapon(p, game);
+            return;
+        }
         boolean firing = (p.cmd.buttons & Defs.BT_ATTACK) != 0;
         Integer[] ammoMap = Player.weaponAmmo();
         Integer ammo = ammoFor(ammoMap, p.readyweapon);
-        boolean can = ammo == null || p.ammo[ammo] > 0;
+        int need = Player.ammoNeeded(p.readyweapon);
+        boolean can = ammo == null || p.ammo[ammo] >= need;
         if (!can) {
             int[] fallback = {
                 Defs.WP_PISTOL,
@@ -395,7 +482,7 @@ public final class Player
             };
             for (int w : fallback) {
                 Integer a = ammoFor(ammoMap, w);
-                if (p.weaponowned[w] && (a == null || p.ammo[a] > 0)) {
+                if (p.weaponowned[w] && (a == null || p.ammo[a] >= Player.ammoNeeded(w))) {
                     p.pendingweapon = w;
                     break;
                 }
@@ -471,6 +558,9 @@ public final class Player
             return;
         }
         p.pspriteSy = Sprites.WEAPONBOTTOM;
+        if (p.playerstate == Defs.PST_DEAD || p.health <= 0) {
+            return;
+        }
         if (p.pendingweapon != Defs.WP_NOCHANGE) {
             p.readyweapon = p.pendingweapon;
             p.pendingweapon = Defs.WP_NOCHANGE;
@@ -571,102 +661,97 @@ public final class Player
         }
     }
 
+    private static int ammoNeeded(int weapon)
+    {
+        return weapon == Defs.WP_BFG ? Deh.INSTANCE.bfgCellsPerShot : 1;
+    }
+
     private static void doShot(Player p, Game game, Integer ammo)
     {
+        int need = Player.ammoNeeded(p.readyweapon);
         if (ammo != null) {
-            if (p.ammo[ammo] <= 0) {
+            if (p.ammo[ammo] < need) {
                 return;
             }
-            p.ammo[ammo]--;
-        }
-        int dmg;
-        int range;
-        String sfx;
-        switch (p.readyweapon) {
-            case Defs.WP_FIST:
-                dmg = 2;
-                range = Defs.MELEERANGE;
-                sfx = null;
-                break;
-            case Defs.WP_CHAINSAW:
-                dmg = 3;
-                range = Defs.MELEERANGE;
-                sfx = "sawful";
-                break;
-            case Defs.WP_PISTOL:
-                dmg = 5;
-                range = Defs.MISSILERANGE;
-                sfx = "pistol";
-                break;
-            case Defs.WP_SHOTGUN:
-                dmg = 7;
-                range = Defs.MISSILERANGE;
-                sfx = "shotgn";
-                break;
-            case Defs.WP_SUPERSHOTGUN:
-                dmg = 8;
-                range = Defs.MISSILERANGE;
-                sfx = "dshtgn";
-                break;
-            case Defs.WP_CHAINGUN:
-                dmg = 5;
-                range = Defs.MISSILERANGE;
-                sfx = "pistol";
-                break;
-            case Defs.WP_MISSILE:
-                dmg = 20;
-                range = Defs.MISSILERANGE;
-                sfx = "rlaunc";
-                break;
-            case Defs.WP_PLASMA:
-                dmg = 5;
-                range = Defs.MISSILERANGE;
-                sfx = "plasma";
-                break;
-            case Defs.WP_BFG:
-                dmg = 100;
-                range = Defs.MISSILERANGE;
-                sfx = "bfg";
-                break;
-            default:
-                dmg = 5;
-                range = Defs.MISSILERANGE;
-                sfx = "pistol";
-                break;
+            p.ammo[ammo] -= need;
         }
         boolean hit = false;
-        if (p.mo != null) {
-            int pellets;
-            if (p.readyweapon == Defs.WP_SHOTGUN) {
-                pellets = 7;
-            } else if (p.readyweapon == Defs.WP_SUPERSHOTGUN) {
-                pellets = 20;
+        Mobj mo = p.mo;
+        int weapon = p.readyweapon;
+        if (mo != null && (weapon == Defs.WP_MISSILE || weapon == Defs.WP_PLASMA || weapon == Defs.WP_BFG)) {
+            if (weapon == Defs.WP_PLASMA) {
+                int aim = Enemy.publicRandom() & 1;
+                aim = Math.abs(aim) & 1;
+            }
+            if (weapon == Defs.WP_MISSILE) {
+                Enemy.spawnPlayerMissile(game.world, mo, "MISL", 20 * Defs.FRACUNIT, 20, "rocket");
+                game.startSound("rlaunc");
+            } else if (weapon == Defs.WP_PLASMA) {
+                Enemy.spawnPlayerMissile(game.world, mo, "PLSS", 25 * Defs.FRACUNIT, 5, "plasma");
+                game.startSound("plasma");
             } else {
-                pellets = 1;
+                Enemy.spawnPlayerMissile(game.world, mo, "BFS1", 25 * Defs.FRACUNIT, 100, "bfg");
+                game.startSound("bfg");
             }
-            int shot = dmg * ((game.leveltime & 7) + 1);
-            if (p.readyweapon == Defs.WP_CHAINSAW) {
-                shot = 2 * ((game.leveltime % 10) + 1);
-                range = Defs.MELEERANGE + 1;
-            }
-            for (int i = 0; i < pellets; i++) {
-                if (Collision.lineAttack(game.world, p.mo, shot, game, range)) {
-                    hit = true;
-                }
-            }
+            p.refire++;
+            p.attackdown = true;
+            Enemy.noiseAlert(game.world, mo, game);
+            return;
         }
-        if (p.readyweapon == Defs.WP_CHAINSAW) {
-            game.startSound(hit ? "sawhit" : "sawful");
-        } else if (p.readyweapon == Defs.WP_FIST) {
+        if (mo != null && weapon == Defs.WP_FIST) {
+            int damage = ((Enemy.publicRandom() % 10) + 1) * 2;
+            if (p.powers[Defs.PW_STRENGTH] != 0) {
+                damage *= 10;
+            }
+            int angle = Compat.asU32(mo.angle + (Enemy.publicRandom() - Enemy.publicRandom()) * 262144);
+            hit = Collision.lineAttack(game.world, mo, damage, game, Defs.MELEERANGE, angle);
             if (hit) {
                 game.startSound("punch");
             }
-        } else if (sfx != null) {
-            game.startSound(sfx);
+        } else if (mo != null && weapon == Defs.WP_CHAINSAW) {
+            int damage = 2 * ((Enemy.publicRandom() % 10) + 1);
+            int angle = Compat.asU32(mo.angle + (Enemy.publicRandom() - Enemy.publicRandom()) * 262144);
+            hit = Collision.lineAttack(game.world, mo, damage, game, Defs.MELEERANGE + 1, angle);
+            game.startSound(hit ? "sawhit" : "sawful");
+        } else if (mo != null && weapon == Defs.WP_SHOTGUN) {
+            game.startSound("shotgn");
+            for (int i = 0; i < 7; i++) {
+                if (Player.gunShot(p, game, false)) {
+                    hit = true;
+                }
+            }
+        } else if (mo != null && weapon == Defs.WP_SUPERSHOTGUN) {
+            game.startSound("dshtgn");
+            int slope = Collision.bulletSlope(game.world, mo);
+            for (int i = 0; i < 20; i++) {
+                int damage = 5 * ((Enemy.publicRandom() % 3) + 1);
+                int angle = Compat.asU32(mo.angle + (Enemy.publicRandom() - Enemy.publicRandom()) * 524288);
+                int pellet = slope + (Enemy.publicRandom() - Enemy.publicRandom()) * 32;
+                if (Collision.lineAttack(game.world, mo, damage, game, Defs.MISSILERANGE, angle, pellet)) {
+                    hit = true;
+                }
+            }
+        } else if (mo != null) {
+            game.startSound("pistol");
+            Player.gunShot(p, game, p.refire == 0);
         }
         p.refire++;
         p.attackdown = true;
-        Enemy.noiseAlert(game.world, p.mo, game);
+        if (mo != null) {
+            Enemy.noiseAlert(game.world, mo, game);
+        }
+    }
+
+    private static boolean gunShot(Player p, Game game, boolean accurate)
+    {
+        Mobj mo = p.mo;
+        int slope = Collision.bulletSlope(game.world, mo);
+        int damage = 5 * ((Enemy.publicRandom() % 3) + 1);
+        int angle = mo.angle;
+        if (!accurate) {
+            angle = Compat.asU32(angle + (Enemy.publicRandom() - Enemy.publicRandom()) * 262144);
+        }
+        return Collision.lineAttack(game.world, mo, damage, game, Defs.MISSILERANGE, angle, slope);
     }
 
     public static String currentWeaponPatch(Player p)

@@ -49,7 +49,7 @@ public final class Resources
 
     public byte[] colormap(int level)
     {
-        level = Math.max(0, Math.min(31, level));
+        level = Math.max(0, Math.min(32, level));
         byte[] out = new byte[256];
         int src = level * 256;
         if (this.colormaps.length >= src + 256) {

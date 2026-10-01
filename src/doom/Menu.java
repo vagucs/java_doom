@@ -276,6 +276,11 @@ public final class Menu
             action("loadgame", 0);
             return true;
         }
+        if (key == Keys.F1)
+        {
+            openHelp();
+            return true;
+        }
         if (!active)
         {
             if (key == Keys.ESC)
@@ -468,6 +473,17 @@ public final class Menu
         message = text;
         confirm = true;
         messageAction = action;
+    }
+
+    private void openHelp()
+    {
+        active = true;
+        message = null;
+        enteringSave = false;
+        menus.get("read1").lastOn = 0;
+        screen = "read1";
+        itemOn = 0;
+        sound.play("swtchn");
     }
 
     private void go(String next)

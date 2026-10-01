@@ -31,6 +31,8 @@ public class World
     public int bmapwidth;
     public int bmapheight;
     public byte[] blockmaplump = new byte[0];
+    public int[] blockmapShorts = new int[0];
+    public Mobj[] blocklinks = new Mobj[0];
     public int validcount;
     public List<Mobj> mobjs = new ArrayList<>();
     public byte[] rejectmatrix = new byte[0];
@@ -218,13 +220,25 @@ public class World
     private void loadBlockmap(byte[] data)
     {
         this.blockmaplump = data;
-        if (data.length < 8) {
+        int n = data.length / 2;
+        int[] lump = new int[n];
+        for (int i = 0; i < n; i++) {
+            lump[i] = Bin.u16(data, i * 2);
+        }
+        this.blockmapShorts = lump;
+        if (n < 4) {
             return;
         }
         this.bmaporgx = Bin.i16(data, 0) * Defs.FRACUNIT;
         this.bmaporgy = Bin.i16(data, 2) * Defs.FRACUNIT;
         this.bmapwidth = Bin.i16(data, 4);
         this.bmapheight = Bin.i16(data, 6);
+        int count = this.bmapwidth * this.bmapheight;
+        this.blockmap = new int[count];
+        for (int i = 0; i < count && 4 + i < lump.length; i++) {
+            this.blockmap[i] = lump[4 + i];
+        }
+        this.blocklinks = new Mobj[count];
     }
 
     public MapThing playerStart()

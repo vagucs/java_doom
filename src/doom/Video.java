@@ -38,6 +38,9 @@ public final class Video
     private static final int SDL_QUIT = 0x100;
     private static final int SDL_KEYDOWN = 0x300;
     private static final int SDL_KEYUP = 0x301;
+    private static final int SDL_MOUSEMOTION = 0x400;
+    private static final int SDL_MOUSEBUTTONDOWN = 0x401;
+    private static final int SDL_MOUSEBUTTONUP = 0x402;
     private static final int AUDIO_S16LSB = 0x8010;
 
     public final int[] fb = new int[Defs.SCREENWIDTH * Defs.SCREENHEIGHT];
@@ -61,6 +64,7 @@ public final class Video
     private final Memory audioHave = new Memory(32);
     private int fpsFrames;
     private int fpsStamp;
+    private boolean mouseGrab;
     private final List<Integer> mix = new ArrayList<>();
 
     private static String libraryPath()
@@ -120,6 +124,15 @@ public final class Video
         if (sdl != null) {
             sdl.SDL_Delay(ms);
         }
+    }
+
+    public void setRelativeMouse(boolean enabled)
+    {
+        if (sdl == null || enabled == mouseGrab) {
+            return;
+        }
+        mouseGrab = enabled;
+        sdl.SDL_SetRelativeMouseMode(enabled ? 1 : 0);
     }
 
     public void toggleFullscreen()
@@ -227,6 +240,19 @@ public final class Video
             int type = eventBuf.getInt(0);
             if (type == SDL_QUIT) {
                 out.add(new GameEvent("quit"));
+                continue;
+            }
+            if (type == SDL_MOUSEMOTION) {
+                GameEvent motion = new GameEvent("mousemotion");
+                motion.dx = eventBuf.getInt(28);
+                motion.dy = eventBuf.getInt(32);
+                out.add(motion);
+                continue;
+            }
+            if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP) {
+                GameEvent button = new GameEvent(type == SDL_MOUSEBUTTONDOWN ? "mousedown" : "mouseup");
+                button.button = eventBuf.getByte(16) & 0xff;
+                out.add(button);
                 continue;
             }
             if (type != SDL_KEYDOWN && type != SDL_KEYUP) {

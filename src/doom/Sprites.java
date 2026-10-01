@@ -28,6 +28,11 @@ public final class Sprites
 
     private static final int MINZ = 4 * Defs.FRACUNIT;
     private static final int MAX_SPRITE_FRAMES = 29;
+    private static final int[] FUZZ_DIR = {
+        1, -1, 1, -1, 1, 1, -1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, -1, -1, -1, 1, -1, -1, 1,
+        1, 1, 1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, -1, -1, -1, 1, 1, 1, 1, -1, 1, 1, -1, 1,
+    };
+    private static int fuzzPos = 0;
 
     private Sprites()
     {
@@ -137,7 +142,7 @@ public final class Sprites
         if (frames == null) {
             return null;
         }
-        int frameIndex = frame & 31;
+        int frameIndex = frame & Info.FF_FRAMEMASK;
         if (frameIndex >= frames.length) {
             return null;
         }
@@ -413,7 +418,9 @@ public final class Sprites
         for (int column = 0; column < Math.max(1, patchWidth); ++column) {
             columnOffsets[column] = Bin.u32(patch, 8 + column * 4);
         }
-        byte[] colormap = renderer.res.colormap(0);
+        boolean fuzz = sprite.mo != null && (sprite.mo.flags & Defs.MF_SHADOW) != 0;
+        byte[] colormap = fuzz ? renderer.res.colormap(6)
+                : (renderer.fixedcolormap != null ? renderer.fixedcolormap : renderer.res.colormap(0));
         int patchLength = patch.length;
         int frac = sprite.startfrac;
         for (int x = sprite.x1; x <= sprite.x2; ++x) {
@@ -433,21 +440,29 @@ public final class Sprites
                     int yh = (bottomScreen - 1) >> Defs.FRACBITS;
                     yl = Math.max(yl, Math.max(clipTop[x] + 1, 0));
                     yh = Math.min(yh, Math.min(clipBottom[x] - 1, renderer.viewheight - 1));
+                    if (fuzz) {
+                        yl = Math.max(yl, 1);
+                        yh = Math.min(yh, renderer.viewheight - 2);
+                    }
                     if (yl <= yh) {
                         int texfrac = Compat.fixedMul((yl << Defs.FRACBITS) - topScreen, yIscale);
                         texfrac = Math.max(0, texfrac);
                         for (int y = yl; y <= yh; ++y) {
-                            int index = texfrac >> Defs.FRACBITS;
-                            if (index >= 0 && index < length) {
-                                int pixel = Bin.u8(patch, source + index);
-                                int value = pixel < colormap.length ? colormap[pixel] & 0xff : pixel;
-                                if (renderer.detailshift != 0) {
-                                    int xx = x << 1;
-                                    int offset = renderer.ylookup[y] + renderer.columnofs[xx];
-                                    fb[offset] = value;
-                                    fb[offset + 1] = value;
-                                } else {
-                                    fb[renderer.ylookup[y] + renderer.columnofs[x]] = value;
+                            if (fuzz) {
+                                drawFuzzPixel(renderer, fb, x, y, colormap);
+                            } else {
+                                int index = texfrac >> Defs.FRACBITS;
+                                if (index >= 0 && index < length) {
+                                    int pixel = Bin.u8(patch, source + index);
+                                    int value = pixel < colormap.length ? colormap[pixel] & 0xff : pixel;
+                                    if (renderer.detailshift != 0) {
+                                        int xx = x << 1;
+                                        int offset = renderer.ylookup[y] + renderer.columnofs[xx];
+                                        fb[offset] = value;
+                                        fb[offset + 1] = value;
+                                    } else {
+                                        fb[renderer.ylookup[y] + renderer.columnofs[x]] = value;
+                                    }
                                 }
                             }
                             texfrac += yIscale;
@@ -457,6 +472,22 @@ public final class Sprites
                 }
             }
             frac += iscale;
+        }
+    }
+
+    private static void drawFuzzPixel(Renderer renderer, int[] fb, int x, int y, byte[] colormap)
+    {
+        int dest = renderer.ylookup[y] + renderer.columnofs[renderer.detailshift != 0 ? (x << 1) : x];
+        int src = dest + FUZZ_DIR[fuzzPos] * Defs.SCREENWIDTH;
+        fuzzPos = (fuzzPos + 1) % FUZZ_DIR.length;
+        if (src < 0 || src >= fb.length) {
+            src = dest;
+        }
+        int pixel = fb[src] & 255;
+        int value = pixel < colormap.length ? colormap[pixel] & 0xff : pixel;
+        fb[dest] = value;
+        if (renderer.detailshift != 0 && dest + 1 < fb.length) {
+            fb[dest + 1] = value;
         }
     }
 

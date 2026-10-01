@@ -37,6 +37,8 @@ public final class Specials
     };
 
     public List<Object> thinkers = new ArrayList<>();
+    public List<LightThinker> lights = new ArrayList<>();
+    public List<Line> scrollLines = new ArrayList<>();
     public List<Button> buttons = new ArrayList<>();
     public boolean exitRequested;
     public boolean secretExit;
@@ -58,6 +60,7 @@ public final class Specials
                 switchMap.put(ib, ia);
             }
         }
+        spawnSpecials();
     }
 
     private int movePlane(Sector s, int speed, int dest, int plane, int dir)
@@ -169,6 +172,12 @@ public final class Specials
 
     public void tick()
     {
+        tickLights();
+        for (Line ln : scrollLines) {
+            if (ln.sides[0] != null) {
+                ln.sides[0].textureoffset += Defs.FRACUNIT;
+            }
+        }
         List<Object> alive = new ArrayList<>();
         for (Object t : thinkers) {
             if (thinkerDead(t)) {
@@ -231,10 +240,10 @@ public final class Specials
         if (d.direction == 0) {
             d.topcountdown--;
             if (d.topcountdown <= 0) {
-                if (d.type == Defs.VLD_NORMAL || d.type == Defs.VLD_BLAZERAISE) {
+                if (d.type == Defs.VLD_NORMAL || d.type == Defs.VLD_BLAZERAISE || d.type == Defs.VLD_CLOSE) {
                     d.direction = -1;
-                    sound.play(d.type == Defs.VLD_NORMAL ? "dorcls" : "bdcls");
-                } else if (d.type == Defs.VLD_CLOSE30) {
+                    sound.play(d.type == Defs.VLD_BLAZERAISE ? "bdcls" : "dorcls");
+                } else if (d.type == Defs.VLD_CLOSE30 || d.type == Defs.VLD_RAISEIN5) {
                     d.direction = 1;
                     sound.play("doropn");
                 }
@@ -276,7 +285,7 @@ public final class Specials
         if (movePlane(p.sector, p.speed, up ? p.high : p.low, 0, up ? 1 : -1) != Defs.RESULT_PASTDEST) {
             return;
         }
-        if (!up) {
+        if (!up || p.type == Defs.PLAT_PERPETUAL) {
             p.status = Defs.PLAT_WAITING;
             p.count = p.wait;
             sound.play("pstop");
@@ -289,7 +298,10 @@ public final class Specials
 
     private void tickFloor(FloorMove f)
     {
-        if (movePlane(f.sector, f.speed, f.dest, 0, f.direction) == Defs.RESULT_PASTDEST) {
+        if (movePlane(f.sector, f.speed, f.dest, 0, f.direction, f.crush) == Defs.RESULT_PASTDEST) {
+            if (f.floorpic != null) {
+                f.sector.floorpic = f.floorpic;
+            }
             f.sector.specialdata = null;
             f.dead = true;
         }
@@ -297,9 +309,27 @@ public final class Specials
 
     private void tickCeiling(CeilingMove c)
     {
-        if (movePlane(c.sector, c.speed, c.dest, 1, c.direction) == Defs.RESULT_PASTDEST) {
-            c.sector.specialdata = null;
-            c.dead = true;
+        int dest = c.ctype != 0 ? (c.direction == 1 ? c.topheight : c.bottomheight) : c.dest;
+        int res = movePlane(c.sector, c.speed, dest, 1, c.direction, c.crush);
+        boolean bounce = c.ctype == Defs.CEIL_CRUSHANDRAISE || c.ctype == Defs.CEIL_FASTCRUSH
+            || c.ctype == Defs.CEIL_SILENTCRUSH;
+        if (res == Defs.RESULT_PASTDEST) {
+            if (bounce) {
+                if (c.direction == -1) {
+                    c.direction = 1;
+                    c.speed = Defs.CEILSPEED * (c.ctype == Defs.CEIL_FASTCRUSH ? 2 : 1);
+                } else {
+                    c.direction = -1;
+                }
+                if (c.ctype == Defs.CEIL_SILENTCRUSH) {
+                    sound.play("pstop");
+                }
+            } else {
+                c.sector.specialdata = null;
+                c.dead = true;
+            }
+        } else if (res == Defs.RESULT_CRUSHED && bounce) {
+            c.speed = Math.max(1, Compat.intdiv(Defs.CEILSPEED, 8));
         }
     }
 
@@ -432,14 +462,79 @@ public final class Specials
         return ok;
     }
 
-    public boolean doFloor(Line line, ToIntFunction<Sector> dest, int dir)
+    private static Line tagLine(int tag)
+    {
+        Line ln = new Line();
+        ln.tag = tag;
+        return ln;
+    }
+
+    public boolean doFloorTag(int tag, ToIntFunction<Sector> dest, int dir)
+    {
+        return doFloor(tagLine(tag), dest, dir);
+    }
+
+    public boolean doDoorTag(int tag, int type)
+    {
+        return doDoor(tagLine(tag), type);
+    }
+
+    public boolean raiseToTextureTag(int tag)
+    {
+        return raiseToTexture(tagLine(tag));
+    }
+
+    public boolean raiseToTexture(Line line)
     {
         boolean ok = false;
         for (Sector s : sectorsFromTag(line.tag)) {
             if (s.specialdata != null) {
                 continue;
             }
-            FloorMove f = new FloorMove(s, dir, dest.applyAsInt(s), Defs.FLOORSPEED);
+            int minsize = 0x7fffffff;
+            for (Line ln : s.lines) {
+                if ((ln.flags & Defs.ML_TWOSIDED) == 0) {
+                    continue;
+                }
+                for (Side side : ln.sides) {
+                    if (side == null || side.bottomtexture <= 0) {
+                        continue;
+                    }
+                    int h = res.textureHeight(side.bottomtexture);
+                    if (h > 0 && h < minsize) {
+                        minsize = h;
+                    }
+                }
+            }
+            if (minsize == 0x7fffffff) {
+                minsize = 64 * Defs.FRACUNIT;
+            }
+            if (startFloor(s, s.floorheight + minsize, 1, Defs.FLOORSPEED, false, null)) {
+                ok = true;
+            }
+        }
+        return ok;
+    }
+
+    public boolean doFloor(Line line, ToIntFunction<Sector> dest, int dir)
+    {
+        return doFloor(line, dest, dir, Defs.FLOORSPEED, false);
+    }
+
+    public boolean doFloor(Line line, ToIntFunction<Sector> dest, int dir, int speed)
+    {
+        return doFloor(line, dest, dir, speed, false);
+    }
+
+    public boolean doFloor(Line line, ToIntFunction<Sector> dest, int dir, int speed, boolean crush)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            if (s.specialdata != null) {
+                continue;
+            }
+            FloorMove f = new FloorMove(s, dir, dest.applyAsInt(s), speed);
+            f.crush = crush;
             s.specialdata = f;
             thinkers.add(f);
             ok = true;
@@ -449,15 +544,20 @@ public final class Specials
 
     public boolean doCeiling(Line line, ToIntFunction<Sector> dest)
     {
-        return doCeiling(line, dest, -1, Defs.CEILSPEED);
+        return doCeiling(line, dest, -1, Defs.CEILSPEED, false);
     }
 
     public boolean doCeiling(Line line, ToIntFunction<Sector> dest, int dir)
     {
-        return doCeiling(line, dest, dir, Defs.CEILSPEED);
+        return doCeiling(line, dest, dir, Defs.CEILSPEED, false);
     }
 
     public boolean doCeiling(Line line, ToIntFunction<Sector> dest, int dir, int speed)
+    {
+        return doCeiling(line, dest, dir, speed, false);
+    }
+
+    public boolean doCeiling(Line line, ToIntFunction<Sector> dest, int dir, int speed, boolean crush)
     {
         boolean ok = false;
         for (Sector s : sectorsFromTag(line.tag)) {
@@ -465,6 +565,7 @@ public final class Specials
                 continue;
             }
             CeilingMove c = new CeilingMove(s, dir, dest.applyAsInt(s), speed);
+            c.crush = crush;
             s.specialdata = c;
             thinkers.add(c);
             ok = true;
@@ -509,6 +610,357 @@ public final class Specials
             }
         }
         return ok;
+    }
+
+    public void spawnSpecials()
+    {
+        for (Sector s : world.sectors) {
+            int sp = s.special;
+            if (sp == 1) {
+                spawnLightFlash(s);
+            } else if (sp == 2) {
+                spawnStrobe(s, Defs.FASTDARK, false);
+            } else if (sp == 3) {
+                spawnStrobe(s, Defs.SLOWDARK, false);
+            } else if (sp == 4) {
+                spawnStrobe(s, Defs.FASTDARK, false);
+                s.special = 4;
+            } else if (sp == 8) {
+                spawnGlow(s);
+            } else if (sp == 10) {
+                spawnDoorCloseIn30(s);
+            } else if (sp == 12) {
+                spawnStrobe(s, Defs.SLOWDARK, true);
+            } else if (sp == 13) {
+                spawnStrobe(s, Defs.FASTDARK, true);
+            } else if (sp == 14) {
+                spawnDoorRaiseIn5(s);
+            } else if (sp == 17) {
+                spawnFireFlicker(s);
+            }
+        }
+        for (Line ln : world.lines) {
+            if (ln.special == 48) {
+                scrollLines.add(ln);
+            }
+        }
+    }
+
+    public static int raiseFloorDest(Sector s)
+    {
+        int dest = lowestCeiling(s);
+        return dest <= s.ceilingheight ? dest : s.ceilingheight;
+    }
+
+    public static int raiseFloorCrushDest(Sector s)
+    {
+        return raiseFloorDest(s) - 8 * Defs.FRACUNIT;
+    }
+
+    public static int highestCeiling(Sector s)
+    {
+        int h = s.ceilingheight;
+        for (Sector o : surroundingSectors(s)) {
+            if (o.ceilingheight > h) {
+                h = o.ceilingheight;
+            }
+        }
+        return h;
+    }
+
+    public static int minSurroundingLight(Sector s, int max)
+    {
+        for (Sector o : surroundingSectors(s)) {
+            if (o.lightlevel < max) {
+                max = o.lightlevel;
+            }
+        }
+        return max;
+    }
+
+    public static int maxSurroundingLight(Sector s)
+    {
+        int h = s.lightlevel;
+        for (Sector o : surroundingSectors(s)) {
+            if (o.lightlevel > h) {
+                h = o.lightlevel;
+            }
+        }
+        return h;
+    }
+
+    public boolean doCrusher(Line line, int ctype)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            if (s.specialdata != null) {
+                continue;
+            }
+            int top = s.ceilingheight;
+            int bottom = s.floorheight;
+            boolean crush = ctype != Defs.CEIL_RAISETOHIGHEST;
+            int speed = Defs.CEILSPEED * (ctype == Defs.CEIL_FASTCRUSH ? 2 : 1);
+            int dir = -1;
+            int dest = bottom;
+            if (ctype == Defs.CEIL_RAISETOHIGHEST) {
+                dest = highestCeiling(s);
+                dir = 1;
+                crush = false;
+            } else if (ctype != Defs.CEIL_LOWERTOFLOOR) {
+                bottom += 8 * Defs.FRACUNIT;
+                dest = bottom;
+            }
+            CeilingMove c = new CeilingMove(s, dir, dest, speed);
+            c.crush = crush;
+            c.ctype = ctype;
+            c.topheight = top;
+            c.bottomheight = bottom;
+            s.specialdata = c;
+            thinkers.add(c);
+            ok = true;
+        }
+        return ok;
+    }
+
+    public boolean doDonut(Line line)
+    {
+        boolean ok = false;
+        for (Sector s1 : sectorsFromTag(line.tag)) {
+            if (s1.specialdata != null || s1.lines.isEmpty()) {
+                continue;
+            }
+            Line edge = s1.lines.get(0);
+            Sector s2 = edge.frontsector == s1 ? edge.backsector : edge.frontsector;
+            if (s2 == null) {
+                continue;
+            }
+            Sector s3 = null;
+            for (Line ln : s2.lines) {
+                if (ln.backsector != null && ln.backsector != s1) {
+                    s3 = ln.backsector;
+                    break;
+                }
+            }
+            if (s3 == null) {
+                continue;
+            }
+            if (startFloor(s2, s3.floorheight, 1, Compat.intdiv(Defs.FLOORSPEED, 2), false, s3.floorpic)) {
+                ok = true;
+            }
+            if (startFloor(s1, s3.floorheight, -1, Compat.intdiv(Defs.FLOORSPEED, 2), false, null)) {
+                ok = true;
+            }
+        }
+        return ok;
+    }
+
+    private boolean startFloor(Sector s, int dest, int dir, int speed, boolean crush, Integer pic)
+    {
+        if (s.specialdata != null) {
+            return false;
+        }
+        FloorMove f = new FloorMove(s, dir, dest, speed);
+        f.crush = crush;
+        f.floorpic = pic;
+        s.specialdata = f;
+        thinkers.add(f);
+        return true;
+    }
+
+    public boolean doPlatPerpetual(Line line)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            if (s.specialdata != null) {
+                continue;
+            }
+            Plat p = new Plat(s, Defs.PLAT_PERPETUAL, Enemy.random() & 1, Defs.PLATSPEED,
+                Math.min(lowestFloor(s), s.floorheight), Math.max(highestFloor(s), s.floorheight),
+                Defs.PLATWAIT * Defs.TICRATE);
+            s.specialdata = p;
+            thinkers.add(p);
+            sound.play("pstart");
+            ok = true;
+        }
+        return ok;
+    }
+
+    public boolean doPlatRaise(Line line, int amount)
+    {
+        boolean ok = false;
+        Integer pic = line.sides[0] != null && line.sides[0].sector != null ? line.sides[0].sector.floorpic : null;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            if (s.specialdata != null) {
+                continue;
+            }
+            int high = amount != 0 ? s.floorheight + amount : nextHighestFloor(s, s.floorheight);
+            if (pic != null) {
+                s.floorpic = pic;
+            }
+            Plat p = new Plat(s, Defs.PLAT_DWUS, Defs.PLAT_UP, Compat.intdiv(Defs.PLATSPEED, 2), s.floorheight, high, 0);
+            s.specialdata = p;
+            thinkers.add(p);
+            sound.play("pstart");
+            ok = true;
+        }
+        return ok;
+    }
+
+    public boolean lightTurnOn(Line line, int bright)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            s.lightlevel = bright != 0 ? bright : maxSurroundingLight(s);
+            ok = true;
+        }
+        return ok;
+    }
+
+    public boolean turnTagLightsOff(Line line)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            s.lightlevel = minSurroundingLight(s, s.lightlevel);
+            ok = true;
+        }
+        return ok;
+    }
+
+    public boolean startLightStrobing(Line line)
+    {
+        boolean ok = false;
+        for (Sector s : sectorsFromTag(line.tag)) {
+            if (s.specialdata != null) {
+                continue;
+            }
+            spawnStrobe(s, Defs.SLOWDARK, false);
+            ok = true;
+        }
+        return ok;
+    }
+
+    private void spawnLightFlash(Sector s)
+    {
+        s.special = 0;
+        LightThinker l = new LightThinker(s, "flash");
+        l.maxlight = s.lightlevel;
+        l.minlight = minSurroundingLight(s, s.lightlevel);
+        l.count = (Enemy.random() & l.maxtime) + 1;
+        lights.add(l);
+    }
+
+    private void spawnStrobe(Sector s, int dark, boolean sync)
+    {
+        s.special = 0;
+        int min = minSurroundingLight(s, s.lightlevel);
+        LightThinker l = new LightThinker(s, "strobe");
+        l.maxlight = s.lightlevel;
+        l.minlight = min == s.lightlevel ? 0 : min;
+        l.darktime = dark;
+        l.brighttime = Defs.STROBEBRIGHT;
+        l.count = sync ? 1 : (Enemy.random() & 7) + 1;
+        lights.add(l);
+    }
+
+    private void spawnGlow(Sector s)
+    {
+        s.special = 0;
+        LightThinker l = new LightThinker(s, "glow");
+        l.maxlight = s.lightlevel;
+        l.minlight = minSurroundingLight(s, s.lightlevel);
+        lights.add(l);
+    }
+
+    private void spawnFireFlicker(Sector s)
+    {
+        s.special = 0;
+        LightThinker l = new LightThinker(s, "fire");
+        l.maxlight = s.lightlevel;
+        l.minlight = minSurroundingLight(s, s.lightlevel) + 16;
+        l.count = 4;
+        lights.add(l);
+    }
+
+    private void spawnDoorCloseIn30(Sector s)
+    {
+        if (s.specialdata != null) {
+            return;
+        }
+        s.special = 0;
+        VerticalDoor d = new VerticalDoor(s, Defs.VLD_CLOSE, 0, s.ceilingheight, Defs.VDOORSPEED, Defs.VDOORWAIT, 30 * Defs.TICRATE);
+        s.specialdata = d;
+        thinkers.add(d);
+    }
+
+    private void spawnDoorRaiseIn5(Sector s)
+    {
+        if (s.specialdata != null) {
+            return;
+        }
+        s.special = 0;
+        VerticalDoor d = new VerticalDoor(s, Defs.VLD_RAISEIN5, 0, lowestCeiling(s) - 4 * Defs.FRACUNIT,
+            Defs.VDOORSPEED, Defs.VDOORWAIT, 5 * 60 * Defs.TICRATE);
+        s.specialdata = d;
+        thinkers.add(d);
+    }
+
+    private void tickLights()
+    {
+        for (LightThinker l : lights) {
+            if ("glow".equals(l.kind)) {
+                if (l.direction == -1) {
+                    l.sector.lightlevel -= Defs.GLOWSPEED;
+                    if (l.sector.lightlevel <= l.minlight) {
+                        l.sector.lightlevel += Defs.GLOWSPEED;
+                        l.direction = 1;
+                    }
+                } else {
+                    l.sector.lightlevel += Defs.GLOWSPEED;
+                    if (l.sector.lightlevel >= l.maxlight) {
+                        l.sector.lightlevel -= Defs.GLOWSPEED;
+                        l.direction = -1;
+                    }
+                }
+                continue;
+            }
+            if (--l.count != 0) {
+                continue;
+            }
+            if ("flash".equals(l.kind)) {
+                if (l.sector.lightlevel == l.maxlight) {
+                    l.sector.lightlevel = l.minlight;
+                    l.count = (Enemy.random() & l.mintime) + 1;
+                } else {
+                    l.sector.lightlevel = l.maxlight;
+                    l.count = (Enemy.random() & l.maxtime) + 1;
+                }
+            } else if ("strobe".equals(l.kind)) {
+                if (l.sector.lightlevel == l.minlight) {
+                    l.sector.lightlevel = l.maxlight;
+                    l.count = l.brighttime;
+                } else {
+                    l.sector.lightlevel = l.minlight;
+                    l.count = l.darktime;
+                }
+            } else if ("fire".equals(l.kind)) {
+                int amount = (Enemy.random() & 3) * 16;
+                l.sector.lightlevel = l.sector.lightlevel - amount < l.minlight ? l.minlight : l.maxlight - amount;
+                l.count = 4;
+            }
+        }
+    }
+
+    public void shootSpecial(Line line, Mobj thing)
+    {
+        int sp = line.special;
+        if (sp == 24 && doFloor(line, Specials::raiseFloorDest, 1)) {
+            changeSwitch(line, 0);
+        } else if (sp == 46) {
+            doDoor(line, Defs.VLD_OPEN);
+            changeSwitch(line, 1);
+        } else if (sp == 47 && doPlatRaise(line, 0)) {
+            changeSwitch(line, 0);
+        }
     }
 
     public void changeSwitch(Line line, int again)
@@ -633,25 +1085,29 @@ public final class Specials
                 once = true;
                 ok = doStairs(line, 16 * Defs.FRACUNIT, Defs.FLOORSPEED * 4);
                 break;
+            case 9:
+                once = true;
+                ok = doDonut(line);
+                break;
             case 41:
                 once = true;
-                ok = doCeiling(line, sector -> sector.floorheight);
+                ok = doCrusher(line, Defs.CEIL_LOWERTOFLOOR);
                 break;
             case 49:
                 once = true;
-                ok = doCeiling(line, sector -> sector.floorheight + 8 * Defs.FRACUNIT);
+                ok = doCrusher(line, Defs.CEIL_CRUSHANDRAISE);
                 break;
             case 14:
                 once = true;
-                ok = doPlatDwus(line);
+                ok = doPlatRaise(line, 32 * Defs.FRACUNIT);
                 break;
             case 15:
                 once = true;
-                ok = doPlatDwus(line);
+                ok = doPlatRaise(line, 24 * Defs.FRACUNIT);
                 break;
             case 20:
                 once = true;
-                ok = doPlatDwus(line);
+                ok = doPlatRaise(line, 0);
                 break;
             case 42:
                 repeat = true;
@@ -728,32 +1184,82 @@ public final class Specials
         } else if (sp == 4) {
             doDoor(line, Defs.VLD_NORMAL);
         } else if (sp == 5) {
-            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1);
+            doFloor(line, Specials::raiseFloorDest, 1);
+        } else if (sp == 6) {
+            doCrusher(line, Defs.CEIL_FASTCRUSH);
+        } else if (sp == 8) {
+            doStairs(line, 8 * Defs.FRACUNIT, Compat.intdiv(Defs.FLOORSPEED, 4));
         } else if (sp == 10) {
             doPlatDwus(line);
+        } else if (sp == 12) {
+            lightTurnOn(line, 0);
+        } else if (sp == 13) {
+            lightTurnOn(line, 255);
         } else if (sp == 16) {
             doDoor(line, Defs.VLD_CLOSE30, true);
+        } else if (sp == 17) {
+            startLightStrobing(line);
         } else if (sp == 19) {
             doFloor(line, sector -> sector.floorheight - 8 * Defs.FRACUNIT, -1);
+        } else if (sp == 25) {
+            doCrusher(line, Defs.CEIL_CRUSHANDRAISE);
         } else if (sp == 36) {
-            doFloor(line, Specials::highestFloor, -1);
+            doFloor(line, Specials::highestFloor, -1, Defs.FLOORSPEED * 4);
         } else if (sp == 38) {
             doFloor(line, Specials::lowestFloor, -1);
         } else if (sp == 39) {
             teleport(line, side, thing);
-            clear = false;
+        } else if (sp == 44) {
+            doCrusher(line, Defs.CEIL_LOWERANDCRUSH);
         } else if (sp == 52) {
             exitRequested = true;
             clear = false;
-        } else if (sp == 88) {
-            doPlatDwus(line);
+        } else if (sp == 53) {
+            doPlatPerpetual(line);
+        } else if (sp == 56) {
+            doFloor(line, Specials::raiseFloorCrushDest, 1, Defs.FLOORSPEED, true);
+        } else if (sp == 58) {
+            doFloor(line, sector -> sector.floorheight + 24 * Defs.FRACUNIT, 1);
+        } else if (sp == 79) {
+            lightTurnOn(line, 35);
+            clear = false;
+        } else if (sp == 80) {
+            lightTurnOn(line, 0);
+            clear = false;
+        } else if (sp == 81) {
+            lightTurnOn(line, 255);
             clear = false;
         } else if (sp == 86) {
             doDoor(line, Defs.VLD_OPEN);
             clear = false;
+        } else if (sp == 87) {
+            doPlatPerpetual(line);
+            clear = false;
+        } else if (sp == 88) {
+            doPlatDwus(line);
+            clear = false;
         } else if (sp == 90) {
             doDoor(line, Defs.VLD_NORMAL);
             clear = false;
+        } else if (sp == 91) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1);
+            clear = false;
+        } else if (sp == 92) {
+            doFloor(line, sector -> sector.floorheight + 24 * Defs.FRACUNIT, 1);
+            clear = false;
+        } else if (sp == 94) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1, Defs.FLOORSPEED, true);
+            clear = false;
+        } else if (sp == 97) {
+            teleport(line, side, thing);
+            clear = false;
+        } else if (sp == 98) {
+            doFloor(line, Specials::highestFloor, -1, Defs.FLOORSPEED * 4);
+            clear = false;
+        } else if (sp == 100) {
+            doStairs(line, 16 * Defs.FRACUNIT, Defs.FLOORSPEED * 4);
+        } else if (sp == 104) {
+            turnTagLightsOff(line);
         } else if (sp == 105) {
             doDoor(line, Defs.VLD_BLAZERAISE);
             clear = false;
@@ -763,6 +1269,14 @@ public final class Specials
         } else if (sp == 107) {
             doDoor(line, Defs.VLD_BLAZECLOSE);
             clear = false;
+        } else if (sp == 108) {
+            doDoor(line, Defs.VLD_BLAZERAISE);
+        } else if (sp == 109) {
+            doDoor(line, Defs.VLD_BLAZEOPEN);
+        } else if (sp == 110) {
+            doDoor(line, Defs.VLD_BLAZECLOSE);
+        } else if (sp == 119) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1);
         } else if (sp == 120) {
             doPlatDwus(line, true);
             clear = false;
@@ -772,6 +1286,25 @@ public final class Specials
             exitRequested = true;
             secretExit = true;
             clear = false;
+        } else if (sp == 125) {
+            if (thing.player == null) {
+                teleport(line, side, thing);
+            }
+        } else if (sp == 126) {
+            if (thing.player == null) {
+                teleport(line, side, thing);
+            }
+            clear = false;
+        } else if (sp == 128) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1);
+            clear = false;
+        } else if (sp == 129) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1, Defs.FLOORSPEED * 4);
+            clear = false;
+        } else if (sp == 130) {
+            doFloor(line, sector -> Specials.nextHighestFloor(sector, sector.floorheight), 1, Defs.FLOORSPEED * 4);
+        } else if (sp == 141) {
+            doCrusher(line, Defs.CEIL_SILENTCRUSH);
         } else {
             clear = false;
         }
@@ -792,7 +1325,7 @@ public final class Specials
                 continue;
             }
             for (Mobj dest : world.mobjs) {
-                if (dest.type != 14) {
+                if (dest.type != Info.MT_TELEPORTMAN) {
                     continue;
                 }
                 Sector destSector = Collision.pointInSubsector(world, dest.x, dest.y).sector;
@@ -802,6 +1335,7 @@ public final class Specials
                 thing.momx = 0;
                 thing.momy = 0;
                 thing.momz = 0;
+                Collision.unsetThingPosition(world, thing);
                 thing.x = dest.x;
                 thing.y = dest.y;
                 Subsector ss = Collision.pointInSubsector(world, thing.x, thing.y);
@@ -809,6 +1343,7 @@ public final class Specials
                 thing.ceilingz = ss.sector.ceilingheight;
                 thing.z = thing.floorz;
                 thing.angle = dest.angle;
+                Collision.setThingPosition(world, thing);
                 if (thing.player != null) {
                     thing.player.viewz = thing.z + thing.player.viewheight;
                     thing.reactiontime = 18;

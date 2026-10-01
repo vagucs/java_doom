@@ -19,6 +19,9 @@ public final class GameEvent
     public boolean repeat;
     public int mod;
     public String text = "";
+    public int dx;
+    public int dy;
+    public int button;
 
     public GameEvent(String type)
     {

@@ -495,41 +495,48 @@ public final class AmMap
     {
         for (Line linedef : game.world.lines)
         {
-            if (cheating == 0 && ((linedef.flags & Defs.ML_MAPPED) == 0 || (linedef.flags & Defs.ML_DONTDRAW) != 0))
+            if (cheating != 0 || (linedef.flags & Defs.ML_MAPPED) != 0)
             {
-                continue;
-            }
-            Integer color = null;
-            if (linedef.backsector == null)
-            {
-                color = REDS;
-            }
-            else if (linedef.frontsector != null)
-            {
-                if (linedef.special == 39)
+                if ((linedef.flags & Defs.ML_DONTDRAW) != 0 && cheating == 0)
                 {
-                    color = REDS + Compat.intdiv(RED_RANGE, 2);
+                    continue;
                 }
-                else if ((linedef.flags & Defs.ML_SECRET) != 0)
+                Integer color = null;
+                if (linedef.backsector == null)
                 {
                     color = REDS;
                 }
-                else if (linedef.backsector.floorheight != linedef.frontsector.floorheight)
+                else if (linedef.frontsector != null)
                 {
-                    color = BROWNS;
+                    if (linedef.special == 39)
+                    {
+                        color = REDS + Compat.intdiv(RED_RANGE, 2);
+                    }
+                    else if ((linedef.flags & Defs.ML_SECRET) != 0)
+                    {
+                        color = REDS;
+                    }
+                    else if (linedef.backsector.floorheight != linedef.frontsector.floorheight)
+                    {
+                        color = BROWNS;
+                    }
+                    else if (linedef.backsector.ceilingheight != linedef.frontsector.ceilingheight)
+                    {
+                        color = YELLOWS;
+                    }
+                    else if (cheating != 0)
+                    {
+                        color = GRAYS;
+                    }
                 }
-                else if (linedef.backsector.ceilingheight != linedef.frontsector.ceilingheight)
+                if (color != null)
                 {
-                    color = YELLOWS;
-                }
-                else if (cheating != 0)
-                {
-                    color = GRAYS;
+                    line(fb, linedef.v1.x, linedef.v1.y, linedef.v2.x, linedef.v2.y, color);
                 }
             }
-            if (color != null)
+            else if (game.player.powers[Defs.PW_ALLMAP] != 0 && (linedef.flags & Defs.ML_DONTDRAW) == 0)
             {
-                line(fb, linedef.v1.x, linedef.v1.y, linedef.v2.x, linedef.v2.y, color);
+                line(fb, linedef.v1.x, linedef.v1.y, linedef.v2.x, linedef.v2.y, GRAYS + 3);
             }
         }
     }
