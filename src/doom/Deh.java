@@ -255,21 +255,6 @@ public final class Deh
     {
         if (!nodeh)
         {
-            Path iwad = Path.of(iwadPath);
-            String base = iwad.getFileName().toString().toLowerCase(Locale.ROOT);
-            int dot = base.lastIndexOf('.');
-            if (dot >= 0)
-            {
-                base = base.substring(0, dot);
-            }
-            if (base.startsWith("chex"))
-            {
-                Path sibling = iwad.getParent() == null ? Path.of("chex.deh") : iwad.getParent().resolve("chex.deh");
-                if (Files.isRegularFile(sibling))
-                {
-                    loadFile(sibling.toString());
-                }
-            }
             for (int i = 0; i < wad.numLumps(); i++)
             {
                 if ("DEHACKED".equals(wad.lumpName(i)))

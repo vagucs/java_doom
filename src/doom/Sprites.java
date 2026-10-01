@@ -100,6 +100,16 @@ public final class Sprites
                 }
             }
             if (maxFrame >= 0) {
+                for (int frameIndex = 0; frameIndex <= maxFrame; frameIndex++) {
+                    SpriteFrame slot = frames[frameIndex];
+                    if (slot.rotate == -1) {
+                        System.err.println(
+                            "R_InitSprites: No patches found for " + spriteName
+                                + " frame " + (char) ('A' + frameIndex)
+                        );
+                        slot.rotate = 0;
+                    }
+                }
                 result.put(spriteName, Arrays.copyOf(frames, maxFrame + 1));
             }
         }
