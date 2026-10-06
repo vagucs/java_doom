@@ -468,7 +468,9 @@ docs/                donation QR codes
 
 ## Donate
 
+### GitHub Sponsors
 
+[github.com/sponsors/vagucs](https://github.com/sponsors/vagucs)
 
 ### Ethereum
 
