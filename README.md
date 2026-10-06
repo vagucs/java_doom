@@ -221,7 +221,7 @@ JNA: `lib/jna-5.17.0.jar`. `run.bat` downloads it from Maven Central if the file
 
 ## Performance
 
-Typical blit rate on the same PC (320×200, windowed, shareware IWAD). The game still ticks at 35 Hz (`TICRATE`); `-fps` shows the blit rate. Java creates the SDL renderer with `SDL_RENDERER_PRESENTVSYNC`, so the number locks to the display refresh (here **~180**, locked).
+Typical blit rate on the same PC (320×200, windowed, shareware IWAD). The game still ticks at 35 Hz (`TICRATE`); `-fps` shows the blit rate. Java creates the SDL renderer with `SDL_RENDERER_PRESENTVSYNC`, so the number locks to the display refresh (here **~180**, locked). `-novsync` presents without that wait and skips the 1 ms pause between polls.
 
 The same comparison as the Node port, plus Java: Harbour is an interpreter in front of Allegro, Python and PHP walk bytecode every column, Node is a JIT with `BigInt` on every `fixedMul`, Java is HotSpot plus primitive `int` / `long`. That is why this tree sits above Node on the same machine.
 
@@ -373,6 +373,7 @@ Type these on the keyboard during play; no Enter needed. On Nightmare skill only
 | `-fullscreen` | Start in a fullscreen window                                                           |
 | `-crt`        | Scanline-style CRT look (Harbour `-crt` family). Clearer at window scale 2× or more    |
 | `-fps`        | Show frames per second on the HUD (top-right) and in the window title. **F11** toggles |
+| `-novsync`    | Present without waiting for the monitor and skip the 1 ms pause between polls          |
 
 
 

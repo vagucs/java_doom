@@ -201,7 +201,7 @@ JNA: `lib/jna-5.17.0.jar`. O `run.bat` baixa do Maven Central se o arquivo não 
 
 ## Desempenho
 
-Taxa típica de desenho no mesmo PC (320×200, janela, IWAD shareware). O jogo continua em 35 Hz (`TICRATE`); `-fps` mostra a taxa de blit. O Java cria o renderer SDL com `SDL_RENDERER_PRESENTVSYNC`, então o número trava no refresh do monitor (aqui **~180**, travado).
+Taxa típica de desenho no mesmo PC (320×200, janela, IWAD shareware). O jogo continua em 35 Hz (`TICRATE`); `-fps` mostra a taxa de blit. O Java cria o renderer SDL com `SDL_RENDERER_PRESENTVSYNC`, então o número trava no refresh do monitor (aqui **~180**, travado). `-novsync` apresenta sem essa espera e tira a pausa de 1 ms entre as leituras.
 
 O mesmo comparativo do port Node, agora com Java: Harbour é interpretado na frente do Allegro, Python e PHP percorrem bytecode em cada coluna, Node é JIT com `BigInt` em cada `fixedMul`, Java é HotSpot com `int` / `long` primitivos. Por isso esta árvore fica acima do Node na mesma máquina.
 
@@ -328,6 +328,7 @@ Digite no teclado durante o jogo; não precisa de Enter. No skill Nightmare só 
 | `-fullscreen` | Começa em janela cheia |
 | `-crt` | Visual CRT com scanlines (família `-crt` do Harbour). Fica mais claro em escala 2× ou mais |
 | `-fps` | Mostra frames por segundo no HUD (canto superior direito) e no título da janela. **F11** liga/desliga |
+| `-novsync` | Apresenta sem esperar o monitor e tira a pausa de 1 ms entre as leituras |
 
 ### Jogo
 

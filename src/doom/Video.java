@@ -48,6 +48,7 @@ public final class Video
     public int scale = 2;
     public boolean showFps;
     public boolean crt;
+    public boolean novsync;
     public String windowTitle = "DOOM";
     public int fpsValue;
 
@@ -104,6 +105,9 @@ public final class Video
         this.fullscreen = fullscreen;
         this.windowTitle = title;
         this.sdl = Native.load(libraryPath(), Sdl2.class);
+        if (novsync) {
+            this.sdl.SDL_SetHint("SDL_RENDER_VSYNC", "0");
+        }
         int flags = SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO;
         if (this.sdl.SDL_Init(flags) != 0) {
             throw new RuntimeException("SDL_Init: " + error());
@@ -327,12 +331,19 @@ public final class Video
             if (window == null) {
                 throw new RuntimeException("SDL_CreateWindow: " + error());
             }
-            renderer = sdl.SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            int rendererFlags = SDL_RENDERER_ACCELERATED;
+            if (!novsync) {
+                rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
+            }
+            renderer = sdl.SDL_CreateRenderer(window, -1, rendererFlags);
             if (renderer == null) {
                 renderer = sdl.SDL_CreateRenderer(window, -1, 0);
             }
             if (renderer == null) {
                 throw new RuntimeException("SDL_CreateRenderer: " + error());
+            }
+            if (novsync) {
+                sdl.SDL_RenderSetVSync(renderer, 0);
             }
             texture = sdl.SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Defs.SCREENWIDTH, Defs.SCREENHEIGHT);
             if (texture == null) {

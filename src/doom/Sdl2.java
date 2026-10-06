@@ -43,7 +43,11 @@ public interface Sdl2 extends Library
 
     void SDL_SetWindowTitle(Pointer window, String title);
 
+    int SDL_SetHint(String name, String value);
+
     Pointer SDL_CreateRenderer(Pointer window, int index, int flags);
+
+    int SDL_RenderSetVSync(Pointer renderer, int vsync);
 
     void SDL_DestroyRenderer(Pointer renderer);
 

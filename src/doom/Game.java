@@ -68,6 +68,7 @@ public final class Game
     public Boolean fastOn;
     public boolean fullscreen;
     public boolean crt;
+    public boolean novsync;
     public String iwadPath = "";
     public Menu menu;
     public boolean showMessages = true;
@@ -1592,9 +1593,13 @@ public final class Game
             game.res.init();
             game.renderer = new Renderer(game.res);
             game.applyViewSize();
+            game.video.novsync = game.novsync;
             game.video.init(game.fullscreen, "DOOM (Java)");
             game.video.showFps = game.showFps;
             game.video.crt = game.crt;
+            if (game.novsync) {
+                System.out.println("vsync off");
+            }
             game.playpal = game.wad.cacheLumpName("PLAYPAL");
             game.video.setPalette(game.playpal);
             if (game.nosound)
@@ -1688,7 +1693,7 @@ public final class Game
                     }
                 }
                 game.draw();
-                if (!game.timingdemo && accum < tickMs / 2)
+                if (!game.timingdemo && !game.novsync && accum < tickMs / 2)
                 {
                     usleep(1);
                 }
@@ -1765,6 +1770,10 @@ public final class Game
             else if ("-crt".equals(arg))
             {
                 game.crt = true;
+            }
+            else if ("-novsync".equals(arg))
+            {
+                game.novsync = true;
             }
             else if ("-deh".equals(arg))
             {
