@@ -56,6 +56,7 @@ public class Mobj
     public String attackKind = "hitscan";
     public boolean didFire;
     public String missileKind = "";
+    public Mobj struck;
     public Mobj tracer;
     public boolean easySkip;
     public int istate;

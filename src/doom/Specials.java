@@ -388,6 +388,38 @@ public final class Specials
         return ok;
     }
 
+    private void lockedBlazeDoor(Line line, Mobj thing, int sp)
+    {
+        Player p = thing.player;
+        if (p == null) {
+            return;
+        }
+        int card;
+        int skull;
+        String name;
+        if (sp == 99 || sp == 133) {
+            card = Defs.IT_BLUECARD;
+            skull = Defs.IT_BLUESKULL;
+            name = "blue";
+        } else if (sp == 134 || sp == 135) {
+            card = Defs.IT_REDCARD;
+            skull = Defs.IT_REDSKULL;
+            name = "red";
+        } else {
+            card = Defs.IT_YELLOWCARD;
+            skull = Defs.IT_YELLOWSKULL;
+            name = "yellow";
+        }
+        if (!(p.cards[card] || p.cards[skull])) {
+            p.message = "You need a " + name + " key to open this door";
+            sound.play("oof");
+            return;
+        }
+        if (doDoor(line, Defs.VLD_BLAZEOPEN)) {
+            changeSwitch(line, (sp == 99 || sp == 134 || sp == 136) ? 1 : 0);
+        }
+    }
+
     public void verticalDoor(Line line, Mobj thing)
     {
         Player p = thing.player;
@@ -1013,6 +1045,10 @@ public final class Specials
             verticalDoor(line, thing);
             return;
         }
+        if (sp == 99 || sp == 133 || sp == 134 || sp == 135 || sp == 136 || sp == 137) {
+            lockedBlazeDoor(line, thing, sp);
+            return;
+        }
         if (sp == 11 || sp == 51) {
             changeSwitch(line, 0);
             exitRequested = true;
@@ -1075,7 +1111,7 @@ public final class Specials
                 break;
             case 102:
                 once = true;
-                ok = doFloor(line, sector -> sector.floorheight - 8 * Defs.FRACUNIT, -1);
+                ok = doFloor(line, Specials::highestFloor, -1);
                 break;
             case 7:
                 once = true;
@@ -1143,7 +1179,7 @@ public final class Specials
                 break;
             case 45:
                 repeat = true;
-                ok = doFloor(line, sector -> sector.floorheight - 8 * Defs.FRACUNIT, -1);
+                ok = doFloor(line, Specials::highestFloor, -1);
                 break;
             case 60:
                 repeat = true;
@@ -1200,7 +1236,7 @@ public final class Specials
         } else if (sp == 17) {
             startLightStrobing(line);
         } else if (sp == 19) {
-            doFloor(line, sector -> sector.floorheight - 8 * Defs.FRACUNIT, -1);
+            doFloor(line, Specials::highestFloor, -1);
         } else if (sp == 25) {
             doCrusher(line, Defs.CEIL_CRUSHANDRAISE);
         } else if (sp == 36) {

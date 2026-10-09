@@ -149,6 +149,7 @@ public final class Player
         mo.angle = Compat.asU32(Compat.intdiv(start.angle, 45) * 0x20000000);
         mo.floorz = sec.floorheight;
         mo.ceilingz = sec.ceilingheight;
+        mo.type = Info.MT_PLAYER;
         Player p = new Player(mo, cheats);
         mo.player = p;
         p.health = Deh.INSTANCE.initialHealth;
@@ -432,7 +433,7 @@ public final class Player
         };
         seq[Defs.WP_PLASMA] = new AttackStep[] {
             new AttackStep("PLSGA0", 3, 1, "PLSFA0", 4, 1),
-            new AttackStep("PLSGB0", 20, 0, "", 0, 0),
+            new AttackStep("PLSGB0", 20, 0, "", 0, 0, true),
         };
         seq[Defs.WP_BFG] = new AttackStep[] {
             new AttackStep("BFGGA0", 20, 0, "", 0, 0),
@@ -642,6 +643,10 @@ public final class Player
                 return;
             }
             AttackStep step = seq[p.pspriteStep];
+            if (step.refire && firing && can && p.pendingweapon == Defs.WP_NOCHANGE && p.health > 0) {
+                p.pspriteStep = 0;
+                continue;
+            }
             p.pspriteBody = step.body;
             p.pspriteTics = step.tics;
             if (step.ft != 0) {
@@ -680,8 +685,8 @@ public final class Player
         int weapon = p.readyweapon;
         if (mo != null && (weapon == Defs.WP_MISSILE || weapon == Defs.WP_PLASMA || weapon == Defs.WP_BFG)) {
             if (weapon == Defs.WP_PLASMA) {
-                int aim = Enemy.publicRandom() & 1;
-                aim = Math.abs(aim) & 1;
+                p.pspriteFlash = (Enemy.publicRandom() & 1) != 0 ? "PLSFB0" : "PLSFA0";
+                p.flashTics = 4;
             }
             if (weapon == Defs.WP_MISSILE) {
                 Enemy.spawnPlayerMissile(game.world, mo, "MISL", 20 * Defs.FRACUNIT, 20, "rocket");
@@ -794,8 +799,14 @@ public final class Player
         final String flash;
         final int ft;
         final int light;
+        final boolean refire;
 
         AttackStep(String body, int tics, int fire, String flash, int ft, int light)
+        {
+            this(body, tics, fire, flash, ft, light, false);
+        }
+
+        AttackStep(String body, int tics, int fire, String flash, int ft, int light, boolean refire)
         {
             this.body = body;
             this.tics = tics;
@@ -803,6 +814,7 @@ public final class Player
             this.flash = flash;
             this.ft = ft;
             this.light = light;
+            this.refire = refire;
         }
     }
 }

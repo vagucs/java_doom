@@ -178,7 +178,7 @@ public final class Sprites
         List<SpriteDraw> visible = new ArrayList<>();
         for (Mobj mobj : world.mobjs) {
             String sprite = mobj.sprite == null ? "" : mobj.sprite;
-            if (sprite.equals("") || mobj.player != null) {
+            if (sprite.equals("") || mobj.player != null || (mobj.flags & Defs.MF_NOSECTOR) != 0) {
                 continue;
             }
             SpriteDraw item = project(renderer, mobj);

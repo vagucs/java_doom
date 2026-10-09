@@ -777,15 +777,72 @@ public final class Enemy
     {
         int typ = "rocket".equals(kind) ? Info.MT_ROCKET
                 : ("plasma".equals(kind) ? Info.MT_PLASMA : Info.MT_BFG);
-        int a = src.angle;
+        Collision.MissileAim aim = Collision.missileAim(world, src);
+        int a = aim.angle;
         Mobj mo = Thinker.spawnMobj(world, src.x, src.y, src.z + 32 * Defs.FRACUNIT, typ, null);
         int actualSpeed = Info.miInt(typ, Info.MI_SPEED);
+        if (actualSpeed == 0) {
+            actualSpeed = speed;
+        }
         mo.angle = a;
         mo.momx = Compat.fixedMul(actualSpeed, Tables.fineCos(a));
         mo.momy = Compat.fixedMul(actualSpeed, Tables.fineSin(a));
         mo.target = src;
-        mo.momz = 0;
+        mo.momz = Compat.fixedMul(actualSpeed, aim.slope);
+        if (damage != 0) {
+            mo.damage = damage;
+        }
         Enemy.checkMissileSpawn(mo);
+    }
+
+    /** The blast reached this body, including a shot that died on the floor under it. */
+    static boolean missileReaches(Mobj mo, Mobj other, int x, int y, int z)
+    {
+        if (other == mo || other == mo.target || other.health <= 0) {
+            return false;
+        }
+        if ((other.flags & Defs.MF_SHOOTABLE) == 0) {
+            return false;
+        }
+        int reach = other.radius + mo.radius;
+        if (Math.abs(other.x - x) >= reach || Math.abs(other.y - y) >= reach) {
+            return false;
+        }
+        int slack = 64 * Defs.FRACUNIT;
+        int z1 = z + mo.momz;
+        int low = Math.min(z, z1) - slack;
+        int high = Math.max(z, z1) + mo.height + slack;
+        if (z <= mo.floorz) {
+            low = Math.min(low, mo.floorz - slack);
+            high = Math.max(high, mo.floorz + slack);
+        }
+        return low <= other.z + other.height && high >= other.z;
+    }
+
+    private static Mobj missileVictim(World world, Mobj mo)
+    {
+        int[][] spots = mo.tmx != mo.x || mo.tmy != mo.y
+                ? new int[][] { { mo.x, mo.y, mo.z }, { mo.tmx, mo.tmy, mo.z } }
+                : new int[][] { { mo.x, mo.y, mo.z } };
+        Mobj best = null;
+        long bestDist = 1L << 62;
+        for (Mobj other : world.mobjs) {
+            if (mo.target != null && Collision.sameSpecies(mo.target, other)
+                    && other != mo.target && other.type != Info.MT_PLAYER) {
+                continue;
+            }
+            for (int[] spot : spots) {
+                if (!missileReaches(mo, other, spot[0], spot[1], spot[2])) {
+                    continue;
+                }
+                int dist = Math.max(Math.abs(other.x - spot[0]), Math.abs(other.y - spot[1]));
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = other;
+                }
+            }
+        }
+        return best;
     }
 
     private static void tickMissile(World world, Mobj mo, Game game)
@@ -823,6 +880,10 @@ public final class Enemy
 
     private static void explodeMissile(World world, Mobj mo, Game game, Mobj hit)
     {
+        if (hit == null) {
+            hit = mo.struck != null ? mo.struck : Enemy.missileVictim(world, mo);
+        }
+        mo.struck = null;
         if (hit != null) {
             Mobj source = mo.target != null ? mo.target : mo;
             int damage = mo.damage != 0 ? mo.damage : Info.miInt(mo.type, Info.MI_DAMAGE);

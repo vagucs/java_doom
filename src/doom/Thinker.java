@@ -52,7 +52,14 @@ public final class Thinker
             mo.z = z;
         world.mobjs.add(mo);
         Collision.setThingPosition(world, mo);
-        setMobjState(mo, Info.miInt(typ, Info.MI_SPAWNSTATE), world, game);
+        // Vanilla does not call P_SetMobjState here: A_Look must wait until the
+        // thinker advances, after P_SpawnMapThing has set the facing angle.
+        int state = Info.miInt(typ, Info.MI_SPAWNSTATE);
+        int[] st = Info.STATES[state];
+        mo.istate = state;
+        mo.tics = st[2];
+        mo.sprite = Info.SPRNAMES[st[0]];
+        mo.frame = st[1];
         return mo;
     }
 

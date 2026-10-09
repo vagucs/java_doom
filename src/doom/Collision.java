@@ -220,7 +220,7 @@ public final class Collision
         return true;
     }
 
-    private static boolean sameSpecies(Mobj target, Mobj other)
+    static boolean sameSpecies(Mobj target, Mobj other)
     {
         if (target.type == other.type) {
             return true;
@@ -250,9 +250,6 @@ public final class Collision
             return false;
         }
         if ((tm.flags & Defs.MF_MISSILE) != 0) {
-            if (tm.z > other.z + other.height || tm.z + tm.height < other.z) {
-                return true;
-            }
             Mobj target = tm.target;
             if (target != null && sameSpecies(target, other)) {
                 if (other == target) {
@@ -265,9 +262,10 @@ public final class Collision
             if ((other.flags & Defs.MF_SHOOTABLE) == 0) {
                 return (other.flags & Defs.MF_SOLID) == 0;
             }
-            if (game != null) {
-                game.damageMobj(other, target != null ? target : tm, ((Enemy.publicRandom() % 8) + 1) * tm.damage, tm);
+            if (!Enemy.missileReaches(tm, other, tm.tmx, tm.tmy, tm.z)) {
+                return true;
             }
+            tm.struck = other;
             return false;
         }
         if ((other.flags & Defs.MF_SPECIAL) != 0) {
@@ -665,35 +663,43 @@ public final class Collision
         return traverseIntercepts(trav, Defs.FRACUNIT);
     }
 
-    private static boolean slideTrav(Mobj thing, SlideBest best, Intercept inn)
+    /** A wall the body cannot cross, including a two-sided line flagged blocking. */
+    private static boolean slideBlocks(Mobj thing, Line li)
     {
-        Line li = inn.line;
-        boolean blocking = false;
-        if ((li.flags & Defs.ML_TWOSIDED) == 0) {
-            if (pointOnLineSide(thing.x, thing.y, li) != 0) {
-                return true;
-            }
-            blocking = true;
-        } else {
-            int[] open = lineOpening(li);
-            int opentop = open[0];
-            int openbottom = open[1];
-            if (opentop - openbottom < thing.height) {
-                blocking = true;
-            } else if (opentop - thing.z < thing.height) {
-                blocking = true;
-            } else if (openbottom - thing.z > 24 * Defs.FRACUNIT) {
-                blocking = true;
-            }
+        if (li.v1 == null || li.v2 == null) {
+            return false;
         }
-        if (!blocking) {
+        if ((li.flags & Defs.ML_TWOSIDED) == 0 || li.backsector == null || li.frontsector == null) {
+            return pointOnLineSide(thing.x, thing.y, li) == 0;
+        }
+        int[] open = lineOpening(li);
+        int opentop = open[0];
+        int openbottom = open[1];
+        if (opentop - openbottom < thing.height) {
             return true;
         }
-        if (inn.frac < best.frac) {
-            best.frac = inn.frac;
-            best.line = li;
+        if (opentop - thing.z < thing.height) {
+            return true;
         }
-        return false;
+        if (openbottom - thing.z > 24 * Defs.FRACUNIT) {
+            return true;
+        }
+        return (li.flags & Defs.ML_BLOCKING) != 0;
+    }
+
+    /** Every linedef, including one the body is already touching. The blockmap walk misses that corner. */
+    private static void traceSlideCorner(World world, Mobj thing, int x1, int y1, int x2, int y2, SlideBest best)
+    {
+        for (Line ln : world.lines) {
+            Integer frac = interceptFrac(x1, y1, x2, y2, ln);
+            if (frac == null || frac < 0 || frac > Defs.FRACUNIT || !slideBlocks(thing, ln)) {
+                continue;
+            }
+            if (frac < best.frac) {
+                best.frac = frac;
+                best.line = ln;
+            }
+        }
     }
 
     /** P_HitSlideLine: keep the part of the move that runs along the wall. */
@@ -770,12 +776,9 @@ public final class Collision
             SlideBest best = new SlideBest();
             int mx = thing.momx;
             int my = thing.momy;
-            pathTraverse(world, leadx, leady, leadx + mx, leady + my, Defs.PT_ADDLINES,
-                inn -> slideTrav(thing, best, inn));
-            pathTraverse(world, trailx, leady, trailx + mx, leady + my, Defs.PT_ADDLINES,
-                inn -> slideTrav(thing, best, inn));
-            pathTraverse(world, leadx, traily, leadx + mx, traily + my, Defs.PT_ADDLINES,
-                inn -> slideTrav(thing, best, inn));
+            traceSlideCorner(world, thing, leadx, leady, leadx + mx, leady + my, best);
+            traceSlideCorner(world, thing, trailx, leady, trailx + mx, leady + my, best);
+            traceSlideCorner(world, thing, leadx, traily, leadx + mx, traily + my, best);
             if (best.frac == Defs.FRACUNIT + 1 || best.line == null) {
                 stairstep(world, thing, game);
                 return;
@@ -801,7 +804,7 @@ public final class Collision
             int[] slid = hitSlideLine(thing, best.line, tmx, tmy);
             thing.momx = slid[0];
             thing.momy = slid[1];
-            if (tryMove(world, thing, thing.x + tmx, thing.y + tmy, game)) {
+            if (tryMove(world, thing, thing.x + slid[0], thing.y + slid[1], game)) {
                 return;
             }
         }
@@ -938,22 +941,37 @@ public final class Collision
         return aim(world, source, angle, range).slope;
     }
 
-    public static int bulletSlope(World world, Mobj source)
+    public static final class MissileAim
+    {
+        public final int angle;
+        public final int slope;
+
+        MissileAim(int angle, int slope)
+        {
+            this.angle = angle;
+            this.slope = slope;
+        }
+    }
+
+    /** P_SpawnPlayerMissile aim: straight, then a step left and right. */
+    public static MissileAim missileAim(World world, Mobj source)
     {
         int base = source.angle;
         int span = 16 * 64 * Defs.FRACUNIT;
-        int[] angles = new int[] {
-            base,
-            Compat.asU32(base + (1 << 26)),
-            Compat.asU32(base - (1 << 26)),
-        };
+        int shifted = Compat.asU32(base + (1 << 26));
+        int[] angles = new int[] { base, shifted, Compat.asU32(shifted - (2 << 26)) };
         for (int ang : angles) {
             Aim aimed = aim(world, source, ang, span);
             if (aimed.target != null) {
-                return aimed.slope;
+                return new MissileAim(ang, aimed.slope);
             }
         }
-        return 0;
+        return new MissileAim(base, 0);
+    }
+
+    public static int bulletSlope(World world, Mobj source)
+    {
+        return missileAim(world, source).slope;
     }
 
     public static boolean lineAttack(World world, Mobj source, int damage, Game game, int range)
