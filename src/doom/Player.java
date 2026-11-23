@@ -160,6 +160,12 @@ public final class Player
             mo.flags |= Defs.MF_NOCLIP;
         }
         p.viewz = mo.z + Defs.VIEWHEIGHT;
+        int state = Info.miInt(Info.MT_PLAYER, Info.MI_SPAWNSTATE);
+        int[] st = Info.STATES[state];
+        mo.istate = state;
+        mo.tics = st[2];
+        mo.sprite = Info.SPRNAMES[st[0]];
+        mo.frame = st[1];
         mo.lastlook = Enemy.publicRandom() % 4;
         world.mobjs.add(mo);
         Collision.setThingPosition(world, mo);
@@ -221,34 +227,39 @@ public final class Player
     private static void specialSector(World world, Player p, Game game, int time)
     {
         Mobj mo = p.mo;
-        Sector sec = Collision.pointInSubsector(world, mo.x, mo.y).sector;
+        Sector sec = Collision.thingSector(world, mo);
         if (mo.z != sec.floorheight || sec.special == 0) {
             return;
         }
-        if (sec.special == 9) {
+        int sp = sec.special;
+        if (sp == 9) {
             p.secretcount++;
             sec.special = 0;
             return;
         }
-        int sp = sec.special;
-        if (sp == 5 || sp == 7 || sp == 4 || sp == 16 || sp == 11) {
-            if (p.powers[Defs.PW_IRONFEET] != 0) {
-                return;
-            }
+        if (sp == 11) {
+            p.cheats &= ~Defs.CF_GODMODE;
             if ((time & 0x1f) == 0) {
-            int damage;
-            if (sp == 7) {
-                damage = 5;
-            } else if (sp == 5) {
-                damage = 10;
-            } else {
-                damage = 20;
+                game.damageMobj(mo, null, 20);
             }
-            game.damageMobj(mo, null, damage);
-            if (sp == 11 && p.health <= 10 && game.specials != null) {
+            if (p.health <= 10 && game.specials != null) {
                 game.specials.exitRequested = true;
             }
+            return;
+        }
+        if (sp != 5 && sp != 7 && sp != 4 && sp != 16) {
+            return;
+        }
+        if (sp == 4 || sp == 16) {
+            if (p.powers[Defs.PW_IRONFEET] != 0 && Enemy.publicRandom() >= 5) {
+                return;
             }
+        } else if (p.powers[Defs.PW_IRONFEET] != 0) {
+            return;
+        }
+        if ((time & 0x1f) == 0) {
+            int damage = sp == 7 ? 5 : (sp == 5 ? 10 : 20);
+            game.damageMobj(mo, null, damage);
         }
     }
 
@@ -263,23 +274,26 @@ public final class Player
             p.viewheight = 6 * Defs.FRACUNIT;
         }
         p.deltaviewheight = 0;
-        Player.xyMovement(world, mo, game);
-        Player.zMovement(mo, world, game);
         Player.calcHeight(p, leveltime);
         if (p.attacker != null && p.attacker != mo) {
             int angle = Collision.angleTo(mo.x, mo.y, p.attacker.x, p.attacker.y);
             int delta = Compat.asU32(angle - mo.angle);
-            int ang5 = Defs.ANG90 / 18;
-            if (Integer.compareUnsigned(delta, ang5) < 0
-                || Integer.compareUnsigned(delta, Compat.asU32(-ang5)) > 0) {
+            // ANG90/18 em ponto flutuante; o passo trunca em direção a zero.
+            double ang5 = Defs.ANG90 / 18.0;
+            long deltaU = delta & 0xFFFFFFFFL;
+            if (deltaU < ang5
+                || Integer.compareUnsigned(delta, Compat.asU32((int) (0 - ang5))) > 0) {
                 mo.angle = angle;
                 if (p.damagecount != 0) {
                     p.damagecount--;
                 }
-            } else if (Integer.compareUnsigned(delta, Defs.ANG180) < 0) {
-                mo.angle = Compat.asU32(mo.angle + ang5);
             } else {
-                mo.angle = Compat.asU32(mo.angle - ang5);
+                long facing = mo.angle & 0xFFFFFFFFL;
+                if (Integer.compareUnsigned(delta, Defs.ANG180) < 0) {
+                    mo.angle = Compat.asU32((long) (facing + ang5));
+                } else {
+                    mo.angle = Compat.asU32((long) (facing - ang5));
+                }
             }
         } else if (p.damagecount != 0) {
             p.damagecount--;
@@ -294,23 +308,54 @@ public final class Player
     {
         Mobj mo = p.mo;
         Ticcmd cmd = p.cmd;
+        if ((mo.flags & Defs.MF_JUSTATTACKED) != 0) {
+            cmd.angleturn = 0;
+            cmd.forwardmove = 0xC800 / 512;
+            cmd.sidemove = 0;
+            mo.flags &= ~Defs.MF_JUSTATTACKED;
+        }
         if (p.playerstate == Defs.PST_DEAD) {
             Player.deathThink(world, p, game, leveltime);
             return;
         }
-        mo.angle = Compat.asU32(mo.angle + (cmd.angleturn << 16));
-        if (mo.z <= mo.floorz) {
-            if (cmd.forwardmove != 0) {
-                Player.thrust(mo, mo.angle, cmd.forwardmove * 2048);
+        if (mo.reactiontime != 0) {
+            mo.reactiontime--;
+        } else {
+            mo.angle = Compat.asU32(mo.angle + (cmd.angleturn << 16));
+            if (mo.z <= mo.floorz) {
+                if (cmd.forwardmove != 0) {
+                    Player.thrust(mo, mo.angle, cmd.forwardmove * 2048);
+                }
+                if (cmd.sidemove != 0) {
+                    Player.thrust(mo, Compat.asU32(mo.angle - Defs.ANG90), cmd.sidemove * 2048);
+                }
             }
-            if (cmd.sidemove != 0) {
-                Player.thrust(mo, Compat.asU32(mo.angle - Defs.ANG90), cmd.sidemove * 2048);
+            if ((cmd.forwardmove != 0 || cmd.sidemove != 0) && mo.istate == Info.S_PLAY) {
+                Thinker.setMobjState(mo, Info.S_PLAY_RUN1, world, game);
             }
         }
-        Player.xyMovement(world, mo, game);
-        Player.zMovement(mo, world, game);
         Player.calcHeight(p, leveltime);
         Player.specialSector(world, p, game, leveltime);
+        if ((cmd.buttons & Defs.BT_SPECIAL) != 0) {
+            cmd.buttons = 0;
+        }
+        if ((cmd.buttons & Defs.BT_CHANGE) != 0) {
+            int w = (cmd.buttons & Defs.BT_WEAPONMASK) >> Defs.BT_WEAPONSHIFT;
+            if (w == Defs.WP_FIST && p.weaponowned[Defs.WP_CHAINSAW]
+                    && !(p.readyweapon == Defs.WP_CHAINSAW && p.powers[Defs.PW_STRENGTH] != 0)) {
+                w = Defs.WP_CHAINSAW;
+            }
+            boolean commercial = game.wad != null && game.wad.checkNumForName("MAP01") >= 0;
+            boolean shareware = !commercial && game.wad != null && game.wad.checkNumForName("E2M1") < 0;
+            if (commercial && w == Defs.WP_SHOTGUN && p.weaponowned[Defs.WP_SUPERSHOTGUN]
+                    && p.readyweapon != Defs.WP_SUPERSHOTGUN) {
+                w = Defs.WP_SUPERSHOTGUN;
+            }
+            if (p.weaponowned[w] && w != p.readyweapon && w >= 0 && w <= Defs.WP_SUPERSHOTGUN
+                    && ((w != Defs.WP_PLASMA && w != Defs.WP_BFG) || !shareware)) {
+                p.pendingweapon = w;
+            }
+        }
         if ((cmd.buttons & Defs.BT_USE) != 0) {
             if (!p.usedown) {
                 Collision.useLines(world, p, game);
@@ -318,12 +363,6 @@ public final class Player
             }
         } else {
             p.usedown = false;
-        }
-        if ((cmd.buttons & Defs.BT_CHANGE) != 0) {
-            int w = (cmd.buttons & Defs.BT_WEAPONMASK) >> Defs.BT_WEAPONSHIFT;
-            if (w >= 0 && w <= Defs.WP_SUPERSHOTGUN && p.weaponowned[w] && w != p.readyweapon) {
-                p.pendingweapon = w;
-            }
         }
         Player.weaponThink(p, game);
         if (p.powers[Defs.PW_STRENGTH] != 0) {
@@ -404,13 +443,13 @@ public final class Player
             new AttackStep("PUNGC0", 4, 1, "", 0, 0),
             new AttackStep("PUNGD0", 5, 0, "", 0, 0),
             new AttackStep("PUNGC0", 4, 0, "", 0, 0),
-            new AttackStep("PUNGB0", 5, 0, "", 0, 0),
+            new AttackStep("PUNGB0", 5, 0, "", 0, 0, true),
         };
         seq[Defs.WP_PISTOL] = new AttackStep[] {
             new AttackStep("PISGA0", 4, 0, "", 0, 0),
             new AttackStep("PISGB0", 6, 1, "PISFA0", 7, 1),
             new AttackStep("PISGC0", 4, 0, "", 0, 0),
-            new AttackStep("PISGB0", 5, 0, "", 0, 0),
+            new AttackStep("PISGB0", 5, 0, "", 0, 0, true),
         };
         seq[Defs.WP_SHOTGUN] = new AttackStep[] {
             new AttackStep("SHTGA0", 3, 0, "", 0, 0),
@@ -421,15 +460,17 @@ public final class Player
             new AttackStep("SHTGC0", 5, 0, "", 0, 0),
             new AttackStep("SHTGB0", 5, 0, "", 0, 0),
             new AttackStep("SHTGA0", 3, 0, "", 0, 0),
-            new AttackStep("SHTGA0", 7, 0, "", 0, 0),
+            new AttackStep("SHTGA0", 7, 0, "", 0, 0, true),
         };
         seq[Defs.WP_CHAINGUN] = new AttackStep[] {
             new AttackStep("CHGGA0", 4, 1, "CHGFA0", 5, 1),
             new AttackStep("CHGGB0", 4, 1, "CHGFB0", 5, 2),
+            new AttackStep("CHGGA0", 0, 0, "", 0, 0, true),
         };
         seq[Defs.WP_MISSILE] = new AttackStep[] {
-            new AttackStep("MISGB0", 8, 0, "MISFA0", 15, 1),
+            new AttackStep("MISGB0", 8, 0, "MISFA0", 3, 1),
             new AttackStep("MISGB0", 12, 1, "", 0, 2),
+            new AttackStep("MISGA0", 0, 0, "", 0, 0, true),
         };
         seq[Defs.WP_PLASMA] = new AttackStep[] {
             new AttackStep("PLSGA0", 3, 1, "PLSFA0", 4, 1),
@@ -437,9 +478,9 @@ public final class Player
         };
         seq[Defs.WP_BFG] = new AttackStep[] {
             new AttackStep("BFGGA0", 20, 0, "", 0, 0),
-            new AttackStep("BFGGB0", 10, 0, "BFGFA0", 17, 1),
+            new AttackStep("BFGGB0", 10, 0, "BFGFA0", 11, 1),
             new AttackStep("BFGGB0", 10, 1, "", 0, 2),
-            new AttackStep("BFGGB0", 20, 0, "", 0, 0),
+            new AttackStep("BFGGB0", 20, 0, "", 0, 0, true),
         };
         seq[Defs.WP_CHAINSAW] = new AttackStep[] {
             new AttackStep("SAWGA0", 4, 1, "", 0, 0),
@@ -449,13 +490,13 @@ public final class Player
             new AttackStep("SHT2A0", 3, 0, "", 0, 0),
             new AttackStep("SHT2A0", 7, 1, "SHT2I0", 9, 1),
             new AttackStep("SHT2B0", 7, 0, "", 0, 0),
-            new AttackStep("SHT2C0", 7, 0, "", 0, 0),
+            new AttackStep("SHT2C0", 7, 0, "", 0, 0, false, true),
             new AttackStep("SHT2D0", 7, 0, "", 0, 0),
             new AttackStep("SHT2E0", 7, 0, "", 0, 0),
             new AttackStep("SHT2F0", 7, 0, "", 0, 0),
             new AttackStep("SHT2G0", 6, 0, "", 0, 0),
-            new AttackStep("SHT2H0", 6, 0, "", 0, 0),
-            new AttackStep("SHT2A0", 5, 0, "", 0, 0),
+            new AttackStep("SHT2H0", 6, 0, "", 0, 0, true),
+            new AttackStep("SHT2A0", 5, 0, "", 0, 0, true),
         };
         return seq;
     }
@@ -471,24 +512,6 @@ public final class Player
         Integer ammo = ammoFor(ammoMap, p.readyweapon);
         int need = Player.ammoNeeded(p.readyweapon);
         boolean can = ammo == null || p.ammo[ammo] >= need;
-        if (!can) {
-            int[] fallback = {
-                Defs.WP_PISTOL,
-                Defs.WP_SHOTGUN,
-                Defs.WP_CHAINGUN,
-                Defs.WP_MISSILE,
-                Defs.WP_PLASMA,
-                Defs.WP_BFG,
-                Defs.WP_FIST,
-            };
-            for (int w : fallback) {
-                Integer a = ammoFor(ammoMap, w);
-                if (p.weaponowned[w] && (a == null || p.ammo[a] >= Player.ammoNeeded(w))) {
-                    p.pendingweapon = w;
-                    break;
-                }
-            }
-        }
         if (p.flashTics > 0) {
             p.flashTics--;
             if (p.flashTics <= 0) {
@@ -521,23 +544,52 @@ public final class Player
             Player.raiseWeapon(p, game);
             return;
         }
+        Player.weaponReady(p, game);
+    }
+
+    /** A_WeaponReady, including the same-tic fire after A_Raise reaches the top. */
+    private static void weaponReady(Player p, Game game)
+    {
+        if (p.pendingweapon != Defs.WP_NOCHANGE || p.health <= 0) {
+            Player.lowerWeapon(p, game);
+            return;
+        }
+        boolean firing = (p.cmd.buttons & Defs.BT_ATTACK) != 0;
+        Integer ammo = ammoFor(Player.weaponAmmo(), p.readyweapon);
+        boolean can = ammo == null || p.ammo[ammo] >= Player.ammoNeeded(p.readyweapon);
+        boolean became = !"ready".equals(p.pspriteState);
+        if (became) {
+            Player.startReady(p, game);
+        }
+        if (firing && !can) {
+            Player.selectFallback(p, game);
+            Player.lowerWeapon(p, game);
+            return;
+        }
         if (firing && can && (!p.attackdown || (p.readyweapon != Defs.WP_MISSILE && p.readyweapon != Defs.WP_BFG))) {
             p.pspriteState = "atk";
             p.pspriteStep = 0;
-            p.pspriteSy = Sprites.WEAPONTOP;
             p.attackdown = true;
             Player.enterAttackStep(p, game, ammo, firing, can);
             return;
         }
-        if (!"ready".equals(p.pspriteState)) {
-            Player.startReady(p, game);
-            return;
+        if (!became) {
+            Player.tickReady(p, game);
         }
-        Player.tickReady(p, game);
+        Player.weaponReadyBob(p, game);
         if (!firing) {
             p.attackdown = false;
             p.refire = 0;
         }
+    }
+
+    /** A_WeaponReady bob. Kept on the weapon so A_Lower starts from WEAPONTOP+bob. */
+    private static void weaponReadyBob(Player p, Game game)
+    {
+        Tables.initTables();
+        int angle = (128 * game.leveltime) & Defs.FINEMASK;
+        angle &= (Defs.FINEANGLES / 2) - 1;
+        p.pspriteSy = Sprites.WEAPONTOP + Compat.fixedMul(p.bob, Tables.finesine[angle]);
     }
 
     private static Integer ammoFor(Integer[] ammoMap, int weapon)
@@ -571,6 +623,7 @@ public final class Player
         }
         p.pspriteState = "up";
         p.pspriteBody = weaponPatchName(p.readyweapon);
+        Player.raiseWeapon(p, game);
     }
 
     private static void raiseWeapon(Player p, Game game)
@@ -583,7 +636,7 @@ public final class Player
             return;
         }
         p.pspriteSy = Sprites.WEAPONTOP;
-        Player.startReady(p, game);
+        Player.weaponReady(p, game);
     }
 
     private static void startReady(Player p, Game game)
@@ -631,7 +684,16 @@ public final class Player
         }
         while (true) {
             if (p.pspriteStep >= seq.length) {
-                if (firing && can && p.pendingweapon == Defs.WP_NOCHANGE) {
+                if (p.pendingweapon != Defs.WP_NOCHANGE) {
+                    Player.lowerWeapon(p, game);
+                    return;
+                }
+                if (firing && !can) {
+                    Player.selectFallback(p, game);
+                    Player.lowerWeapon(p, game);
+                    return;
+                }
+                if (firing && can) {
                     p.pspriteStep = 0;
                     continue;
                 }
@@ -642,10 +704,32 @@ public final class Player
                 }
                 return;
             }
+            if (p.pspriteStep == 0 && p.mo != null) {
+                Enemy.noiseAlert(game.world, p.mo, game);
+            }
             AttackStep step = seq[p.pspriteStep];
-            if (step.refire && firing && can && p.pendingweapon == Defs.WP_NOCHANGE && p.health > 0) {
-                p.pspriteStep = 0;
-                continue;
+            if (step.checkReload && !can) {
+                Player.selectFallback(p, game);
+                Player.lowerWeapon(p, game);
+                return;
+            }
+            if (step.refire) {
+                if (firing && p.pendingweapon == Defs.WP_NOCHANGE && p.health > 0) {
+                    p.refire++;
+                    if (can) {
+                        p.pspriteStep = 0;
+                        continue;
+                    }
+                    Player.selectFallback(p, game);
+                    Player.lowerWeapon(p, game);
+                    return;
+                }
+                p.refire = 0;
+                if (!can) {
+                    Player.selectFallback(p, game);
+                    Player.lowerWeapon(p, game);
+                    return;
+                }
             }
             p.pspriteBody = step.body;
             p.pspriteTics = step.tics;
@@ -666,9 +750,41 @@ public final class Player
         }
     }
 
+    /** P_CheckAmmo preference when the ready weapon cannot fire. */
+    private static void selectFallback(Player p, Game game)
+    {
+        boolean commercial = game.wad != null && game.wad.checkNumForName("MAP01") >= 0;
+        boolean shareware = !commercial && game.wad != null && game.wad.checkNumForName("E2M1") < 0;
+        if (p.weaponowned[Defs.WP_PLASMA] && p.ammo[Defs.AM_CELL] != 0 && !shareware) {
+            p.pendingweapon = Defs.WP_PLASMA;
+        } else if (p.weaponowned[Defs.WP_SUPERSHOTGUN] && p.ammo[Defs.AM_SHELL] > 2 && commercial) {
+            p.pendingweapon = Defs.WP_SUPERSHOTGUN;
+        } else if (p.weaponowned[Defs.WP_CHAINGUN] && p.ammo[Defs.AM_CLIP] != 0) {
+            p.pendingweapon = Defs.WP_CHAINGUN;
+        } else if (p.weaponowned[Defs.WP_SHOTGUN] && p.ammo[Defs.AM_SHELL] != 0) {
+            p.pendingweapon = Defs.WP_SHOTGUN;
+        } else if (p.ammo[Defs.AM_CLIP] != 0) {
+            p.pendingweapon = Defs.WP_PISTOL;
+        } else if (p.weaponowned[Defs.WP_CHAINSAW]) {
+            p.pendingweapon = Defs.WP_CHAINSAW;
+        } else if (p.weaponowned[Defs.WP_MISSILE] && p.ammo[Defs.AM_MISL] != 0) {
+            p.pendingweapon = Defs.WP_MISSILE;
+        } else if (p.weaponowned[Defs.WP_BFG] && p.ammo[Defs.AM_CELL] > 40 && !shareware) {
+            p.pendingweapon = Defs.WP_BFG;
+        } else {
+            p.pendingweapon = Defs.WP_FIST;
+        }
+    }
+
     private static int ammoNeeded(int weapon)
     {
-        return weapon == Defs.WP_BFG ? Deh.INSTANCE.bfgCellsPerShot : 1;
+        if (weapon == Defs.WP_BFG) {
+            return Deh.INSTANCE.bfgCellsPerShot;
+        }
+        if (weapon == Defs.WP_SUPERSHOTGUN) {
+            return 2;
+        }
+        return 1;
     }
 
     private static void doShot(Player p, Game game, Integer ammo)
@@ -689,16 +805,15 @@ public final class Player
                 p.flashTics = 4;
             }
             if (weapon == Defs.WP_MISSILE) {
-                Enemy.spawnPlayerMissile(game.world, mo, "MISL", 20 * Defs.FRACUNIT, 20, "rocket");
+                Enemy.spawnPlayerMissile(game.world, mo, "MISL", 20 * Defs.FRACUNIT, 20, "rocket", game);
                 game.startSound("rlaunc");
             } else if (weapon == Defs.WP_PLASMA) {
-                Enemy.spawnPlayerMissile(game.world, mo, "PLSS", 25 * Defs.FRACUNIT, 5, "plasma");
+                Enemy.spawnPlayerMissile(game.world, mo, "PLSS", 25 * Defs.FRACUNIT, 5, "plasma", game);
                 game.startSound("plasma");
             } else {
-                Enemy.spawnPlayerMissile(game.world, mo, "BFS1", 25 * Defs.FRACUNIT, 100, "bfg");
+                Enemy.spawnPlayerMissile(game.world, mo, "BFS1", 25 * Defs.FRACUNIT, 100, "bfg", game);
                 game.startSound("bfg");
             }
-            p.refire++;
             p.attackdown = true;
             Enemy.noiseAlert(game.world, mo, game);
             return;
@@ -720,8 +835,9 @@ public final class Player
             game.startSound(hit ? "sawhit" : "sawful");
         } else if (mo != null && weapon == Defs.WP_SHOTGUN) {
             game.startSound("shotgn");
+            int slope = Collision.bulletSlope(game.world, mo);
             for (int i = 0; i < 7; i++) {
-                if (Player.gunShot(p, game, false)) {
+                if (Player.gunShot(p, game, false, slope)) {
                     hit = true;
                 }
             }
@@ -740,7 +856,6 @@ public final class Player
             game.startSound("pistol");
             Player.gunShot(p, game, p.refire == 0);
         }
-        p.refire++;
         p.attackdown = true;
         if (mo != null) {
             Enemy.noiseAlert(game.world, mo, game);
@@ -749,14 +864,20 @@ public final class Player
 
     private static boolean gunShot(Player p, Game game, boolean accurate)
     {
+        return gunShot(p, game, accurate, null);
+    }
+
+    /** slope null aims once (pistol). A passed slope is the shotgun's single P_BulletSlope. */
+    private static boolean gunShot(Player p, Game game, boolean accurate, Integer slope)
+    {
         Mobj mo = p.mo;
-        int slope = Collision.bulletSlope(game.world, mo);
+        int aim = slope == null ? Collision.bulletSlope(game.world, mo) : slope;
         int damage = 5 * ((Enemy.publicRandom() % 3) + 1);
         int angle = mo.angle;
         if (!accurate) {
             angle = Compat.asU32(angle + (Enemy.publicRandom() - Enemy.publicRandom()) * 262144);
         }
-        return Collision.lineAttack(game.world, mo, damage, game, Defs.MISSILERANGE, angle, slope);
+        return Collision.lineAttack(game.world, mo, damage, game, Defs.MISSILERANGE, angle, aim);
     }
 
     public static String currentWeaponPatch(Player p)
@@ -800,13 +921,19 @@ public final class Player
         final int ft;
         final int light;
         final boolean refire;
+        final boolean checkReload;
 
         AttackStep(String body, int tics, int fire, String flash, int ft, int light)
         {
-            this(body, tics, fire, flash, ft, light, false);
+            this(body, tics, fire, flash, ft, light, false, false);
         }
 
         AttackStep(String body, int tics, int fire, String flash, int ft, int light, boolean refire)
+        {
+            this(body, tics, fire, flash, ft, light, refire, false);
+        }
+
+        AttackStep(String body, int tics, int fire, String flash, int ft, int light, boolean refire, boolean checkReload)
         {
             this.body = body;
             this.tics = tics;
@@ -815,6 +942,7 @@ public final class Player
             this.ft = ft;
             this.light = light;
             this.refire = refire;
+            this.checkReload = checkReload;
         }
     }
 }

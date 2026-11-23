@@ -37,7 +37,8 @@ public class Mobj
     public int reactiontime;
     public int lastlook;
     public Mobj target;
-    public int movedir = 8;
+    public int movedir;
+    public Subsector subsector;
     public int movecount;
     public int threshold;
     public String aiState = "";
@@ -251,20 +252,64 @@ public class Mobj
 
     public static boolean giveAmmo(Player p, int ammo, int num)
     {
+        return giveAmmo(p, ammo, num, null);
+    }
+
+    /** P_GiveAmmo. num 0 is a half clip. Empty ammo may select a gun. */
+    public static boolean giveAmmo(Player p, int ammo, int num, Game game)
+    {
+        if (ammo < 0 || ammo > 3) {
+            return false;
+        }
         if (p.ammo[ammo] >= p.maxammo[ammo]) {
             return false;
         }
-        p.ammo[ammo] = Math.min(p.maxammo[ammo], p.ammo[ammo] + Player.CLIPAMMO[ammo] * num);
+        int old = p.ammo[ammo];
+        int add = num != 0 ? Player.CLIPAMMO[ammo] * num : Player.CLIPAMMO[ammo] / 2;
+        int skill = game != null ? game.skill : Defs.SK_MEDIUM;
+        if (skill == Defs.SK_BABY || skill == Defs.SK_NIGHTMARE) {
+            add *= 2;
+        }
+        p.ammo[ammo] = Math.min(p.maxammo[ammo], p.ammo[ammo] + add);
+        if (old != 0) {
+            return true;
+        }
+        if (ammo == Defs.AM_CLIP && p.readyweapon == Defs.WP_FIST) {
+            p.pendingweapon = p.weaponowned[Defs.WP_CHAINGUN] ? Defs.WP_CHAINGUN : Defs.WP_PISTOL;
+        } else if (ammo == Defs.AM_SHELL
+                && (p.readyweapon == Defs.WP_FIST || p.readyweapon == Defs.WP_PISTOL)
+                && p.weaponowned[Defs.WP_SHOTGUN]) {
+            p.pendingweapon = Defs.WP_SHOTGUN;
+        } else if (ammo == Defs.AM_CELL
+                && (p.readyweapon == Defs.WP_FIST || p.readyweapon == Defs.WP_PISTOL)
+                && p.weaponowned[Defs.WP_PLASMA]) {
+            p.pendingweapon = Defs.WP_PLASMA;
+        } else if (ammo == Defs.AM_MISL && p.readyweapon == Defs.WP_FIST && p.weaponowned[Defs.WP_MISSILE]) {
+            p.pendingweapon = Defs.WP_MISSILE;
+        }
         return true;
     }
 
     public static void touchSpecial(Game game, Mobj special, Mobj toucher)
     {
-        Player p = toucher.player;
-        if (p == null || !special.alive) {
+        int delta = special.z - toucher.z;
+        if (delta > toucher.height || delta < -8 * Defs.FRACUNIT) {
             return;
         }
-        Object[] pair = special.info != null ? special.info : new Object[] { "deco", null };
+        Player p = toucher.player;
+        if (p == null || !special.alive || toucher.health <= 0) {
+            return;
+        }
+        Object[] pair = special.info;
+        if (pair == null || pair.length == 0 || pair[0] == null || "".equals(pair[0])) {
+            Object[] pickup = infoTable().get(special.doomednum);
+            if (pickup != null && pickup.length > 6) {
+                pair = new Object[] { pickup[5], pickup[6] };
+            }
+        }
+        if (pair == null) {
+            pair = new Object[] { "deco", null };
+        }
         String kind = (String) pair[0];
         Object extra = pair[1];
         boolean taken = true;
@@ -339,42 +384,49 @@ public class Mobj
             p.setMessage(names);
         } else if ("weapon".equals(kind)) {
             int w = (Integer) extra;
-            p.weaponowned[w] = true;
-            if (p.readyweapon != w) {
+            int clips = (special.flags & Defs.MF_DROPPED) != 0 ? 1 : 2;
+            boolean gaveAmmo = false;
+            if (w == Defs.WP_SHOTGUN || w == Defs.WP_SUPERSHOTGUN) {
+                gaveAmmo = giveAmmo(p, Defs.AM_SHELL, clips, game);
+            } else if (w == Defs.WP_CHAINGUN) {
+                gaveAmmo = giveAmmo(p, Defs.AM_CLIP, clips, game);
+            } else if (w == Defs.WP_MISSILE) {
+                gaveAmmo = giveAmmo(p, Defs.AM_MISL, clips, game);
+            } else if (w == Defs.WP_PLASMA || w == Defs.WP_BFG) {
+                gaveAmmo = giveAmmo(p, Defs.AM_CELL, clips, game);
+            }
+            boolean gaveWeapon = false;
+            if (!p.weaponowned[w]) {
+                gaveWeapon = true;
+                p.weaponowned[w] = true;
                 p.pendingweapon = w;
             }
-            if (w == Defs.WP_SHOTGUN || w == Defs.WP_SUPERSHOTGUN) {
-                giveAmmo(p, Defs.AM_SHELL, 1);
-            } else if (w == Defs.WP_CHAINGUN) {
-                giveAmmo(p, Defs.AM_CLIP, 1);
-            } else if (w == Defs.WP_MISSILE) {
-                giveAmmo(p, Defs.AM_MISL, 1);
-            } else if (w == Defs.WP_PLASMA || w == Defs.WP_BFG) {
-                giveAmmo(p, Defs.AM_CELL, 1);
+            taken = gaveWeapon || gaveAmmo;
+            if (taken) {
+                String names;
+                if (w == Defs.WP_SHOTGUN) {
+                    names = "You got the shotgun!";
+                } else if (w == Defs.WP_SUPERSHOTGUN) {
+                    names = "You got the super shotgun!";
+                } else if (w == Defs.WP_CHAINGUN) {
+                    names = "You got the chaingun!";
+                } else if (w == Defs.WP_MISSILE) {
+                    names = "You got the rocket launcher!";
+                } else if (w == Defs.WP_PLASMA) {
+                    names = "You got the plasma gun!";
+                } else if (w == Defs.WP_BFG) {
+                    names = "You got the BFG9000!";
+                } else if (w == Defs.WP_CHAINSAW) {
+                    names = "A chainsaw!  Find some meat!";
+                } else {
+                    names = "You got a weapon!";
+                }
+                p.setMessage(names);
+                game.startSound("wpnup");
             }
-            String names;
-            if (w == Defs.WP_SHOTGUN) {
-                names = "You got the shotgun!";
-            } else if (w == Defs.WP_SUPERSHOTGUN) {
-                names = "You got the super shotgun!";
-            } else if (w == Defs.WP_CHAINGUN) {
-                names = "You got the chaingun!";
-            } else if (w == Defs.WP_MISSILE) {
-                names = "You got the rocket launcher!";
-            } else if (w == Defs.WP_PLASMA) {
-                names = "You got the plasma gun!";
-            } else if (w == Defs.WP_BFG) {
-                names = "You got the BFG9000!";
-            } else if (w == Defs.WP_CHAINSAW) {
-                names = "A chainsaw!  Find some meat!";
-            } else {
-                names = "You got a weapon!";
-            }
-            p.setMessage(names);
-            game.startSound("wpnup");
         } else if ("ammo".equals(kind)) {
             int[] ammoExtra = (int[]) extra;
-            taken = giveAmmo(p, ammoExtra[0], ammoExtra[1]);
+            taken = giveAmmo(p, ammoExtra[0], ammoExtra[1], game);
             if (taken) {
                 p.setMessage("Picked up some ammo.");
             }
@@ -383,7 +435,7 @@ public class Mobj
                 if (p.maxammo[i] < 400) {
                     p.maxammo[i] *= 2;
                 }
-                giveAmmo(p, i, 1);
+                giveAmmo(p, i, 1, game);
             }
             p.setMessage("You picked up a backpack full of ammo!");
         } else if ("item".equals(kind)) {

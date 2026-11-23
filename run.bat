@@ -20,15 +20,8 @@ if not exist "lib\jna-5.17.0.jar" (
     if errorlevel 1 exit /b 1
 )
 
-if not exist "lib\SDL2.dll" if exist "..\php_doom\lib\SDL2.dll" (
-    copy /y "..\php_doom\lib\SDL2.dll" "lib\SDL2.dll" >nul
-)
-if not exist "lib\SDL2.dll" if exist "..\node_doom\lib\SDL2.dll" (
-    copy /y "..\node_doom\lib\SDL2.dll" "lib\SDL2.dll" >nul
-)
-
-if not exist "lib\SDL2.dll" if not defined SDL2_PATH (
-    echo Aviso: coloque SDL2.dll em lib\  ^(64-bit, https://github.com/libsdl-org/SDL/releases^)
+if not exist "sdl3\SDL3-3.4.18-win32-x64\SDL3.dll" if not exist "lib\SDL3.dll" if not defined SDL3_PATH (
+    echo Aviso: falta SDL3.dll em sdl3\SDL3-3.4.18-win32-x64\ ou em lib\
 )
 
 if not exist "out\doom\Doom.class" (

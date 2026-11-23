@@ -26,7 +26,7 @@ public final class Collision
     private static final Div trace = new Div(0, 0, 0, 0);
     private static final int INT_MAX = 0x7FFFFFFF;
 
-    private interface ThingFn
+    interface ThingFn
     {
         boolean call(Mobj th);
     }
@@ -67,6 +67,7 @@ public final class Collision
 
     public static void setThingPosition(World world, Mobj thing)
     {
+        thing.subsector = pointInSubsector(world, thing.x, thing.y);
         thing.bnext = null;
         thing.bprev = null;
         thing.blocklinked = false;
@@ -113,6 +114,13 @@ public final class Collision
         return world.subsectors.get(num & ~Defs.NF_SUBSECTOR);
     }
 
+    /** Sector cached by setThingPosition. Fresh point query only if the link is missing. */
+    public static Sector thingSector(World world, Mobj mo)
+    {
+        Subsector sub = mo.subsector != null ? mo.subsector : pointInSubsector(world, mo.x, mo.y);
+        return sub.sector;
+    }
+
     public static int pointOnLineSide(int x, int y, Line line)
     {
         if (line.dx == 0) {
@@ -139,9 +147,9 @@ public final class Collision
         int p1;
         int p2;
         if (line.dx == 0) {
-            p1 = box[Defs.BOXRIGHT] < line.v1.x ? 0 : 1;
-            p2 = box[Defs.BOXLEFT] < line.v1.x ? 0 : 1;
-            if (line.dy > 0) {
+            p1 = box[Defs.BOXRIGHT] < line.v1.x ? 1 : 0;
+            p2 = box[Defs.BOXLEFT] < line.v1.x ? 1 : 0;
+            if (line.dy < 0) {
                 p1 ^= 1;
                 p2 ^= 1;
             }
@@ -176,7 +184,7 @@ public final class Collision
         return new int[] { top, back.floorheight, front.floorheight };
     }
 
-    private static boolean blockThings(World world, int x, int y, ThingFn func)
+    static boolean blockThings(World world, int x, int y, ThingFn func)
     {
         if (x < 0 || y < 0 || x >= world.bmapwidth || y >= world.bmapheight) {
             return true;
@@ -188,6 +196,67 @@ public final class Collision
                 return false;
             }
             mo = nxt;
+        }
+        return true;
+    }
+
+    /** P_TeleportMove: stomp shootables, then place. No line checks. */
+    static boolean teleportMove(World world, Mobj thing, int x, int y, Game game)
+    {
+        thing.tmx = x;
+        thing.tmy = y;
+        int r = thing.radius;
+        int left = x - r;
+        int right = x + r;
+        int bottom = y - r;
+        int top = y + r;
+        Sector sec = pointInSubsector(world, x, y).sector;
+        int floorz = sec.floorheight;
+        int ceilingz = sec.ceilingheight;
+        world.validcount++;
+        if (world.blocklinks.length != 0) {
+            int orgx = world.bmaporgx;
+            int orgy = world.bmaporgy;
+            int xl = Compat.shar(left - orgx - Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            int xh = Compat.shar(right - orgx + Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            int yl = Compat.shar(bottom - orgy - Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            int yh = Compat.shar(top - orgy + Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            for (int bx = xl; bx <= xh; bx++) {
+                for (int by = yl; by <= yh; by++) {
+                    if (!blockThings(world, bx, by, th -> pitStomp(thing, th, game))) {
+                        return false;
+                    }
+                }
+            }
+        }
+        unsetThingPosition(world, thing);
+        thing.floorz = floorz;
+        thing.ceilingz = ceilingz;
+        thing.x = x;
+        thing.y = y;
+        setThingPosition(world, thing);
+        return true;
+    }
+
+    /** PIT_StompThing: monsters fail if the spot is taken, except on MAP30. */
+    private static boolean pitStomp(Mobj tm, Mobj other, Game game)
+    {
+        if ((other.flags & Defs.MF_SHOOTABLE) == 0) {
+            return true;
+        }
+        int blockdist = other.radius + tm.radius;
+        if (Math.abs(other.x - tm.tmx) >= blockdist || Math.abs(other.y - tm.tmy) >= blockdist) {
+            return true;
+        }
+        if (other == tm) {
+            return true;
+        }
+        int mapn = game != null ? game.mapn : 0;
+        if (tm.player == null && mapn != 30) {
+            return false;
+        }
+        if (game != null) {
+            game.damageMobj(other, tm, 10000, tm);
         }
         return true;
     }
@@ -242,7 +311,8 @@ public final class Collision
         }
         if ((tm.flags & Defs.MF_SKULLFLY) != 0) {
             if (game != null) {
-                game.damageMobj(other, tm, ((Enemy.publicRandom() % 8) + 1) * tm.damage, tm);
+                int base = Info.miInt(tm.type, Info.MI_DAMAGE);
+                game.damageMobj(other, tm, ((Enemy.publicRandom() % 8) + 1) * base, tm);
             }
             tm.flags &= ~Defs.MF_SKULLFLY;
             tm.momx = tm.momy = tm.momz = 0;
@@ -250,6 +320,9 @@ public final class Collision
             return false;
         }
         if ((tm.flags & Defs.MF_MISSILE) != 0) {
+            if (tm.z > other.z + other.height || tm.z + tm.height < other.z) {
+                return true;
+            }
             Mobj target = tm.target;
             if (target != null && sameSpecies(target, other)) {
                 if (other == target) {
@@ -262,10 +335,10 @@ public final class Collision
             if ((other.flags & Defs.MF_SHOOTABLE) == 0) {
                 return (other.flags & Defs.MF_SOLID) == 0;
             }
-            if (!Enemy.missileReaches(tm, other, tm.tmx, tm.tmy, tm.z)) {
-                return true;
+            if (game != null) {
+                int base = Info.miInt(tm.type, Info.MI_DAMAGE);
+                game.damageMobj(other, tm.target, ((Enemy.publicRandom() % 8) + 1) * base, tm);
             }
-            tm.struck = other;
             return false;
         }
         if ((other.flags & Defs.MF_SPECIAL) != 0) {
@@ -663,43 +736,39 @@ public final class Collision
         return traverseIntercepts(trav, Defs.FRACUNIT);
     }
 
-    /** A wall the body cannot cross, including a two-sided line flagged blocking. */
-    private static boolean slideBlocks(Mobj thing, Line li)
-    {
-        if (li.v1 == null || li.v2 == null) {
-            return false;
-        }
-        if ((li.flags & Defs.ML_TWOSIDED) == 0 || li.backsector == null || li.frontsector == null) {
-            return pointOnLineSide(thing.x, thing.y, li) == 0;
-        }
-        int[] open = lineOpening(li);
-        int opentop = open[0];
-        int openbottom = open[1];
-        if (opentop - openbottom < thing.height) {
-            return true;
-        }
-        if (opentop - thing.z < thing.height) {
-            return true;
-        }
-        if (openbottom - thing.z > 24 * Defs.FRACUNIT) {
-            return true;
-        }
-        return (li.flags & Defs.ML_BLOCKING) != 0;
-    }
-
-    /** Every linedef, including one the body is already touching. The blockmap walk misses that corner. */
+    /** PTR_SlideTraverse along the blockmap, same three corners as vanilla. */
     private static void traceSlideCorner(World world, Mobj thing, int x1, int y1, int x2, int y2, SlideBest best)
     {
-        for (Line ln : world.lines) {
-            Integer frac = interceptFrac(x1, y1, x2, y2, ln);
-            if (frac == null || frac < 0 || frac > Defs.FRACUNIT || !slideBlocks(thing, ln)) {
-                continue;
+        pathTraverse(world, x1, y1, x2, y2, Defs.PT_ADDLINES, inn -> {
+            Line li = inn.line;
+            if (li == null) {
+                return true;
             }
-            if (frac < best.frac) {
-                best.frac = frac;
-                best.line = ln;
+            boolean blocking = false;
+            if ((li.flags & Defs.ML_TWOSIDED) == 0) {
+                if (pointOnLineSide(thing.x, thing.y, li) != 0) {
+                    return true;
+                }
+                blocking = true;
+            } else {
+                int[] open = lineOpening(li);
+                if (open[0] - open[1] < thing.height) {
+                    blocking = true;
+                } else if (open[0] - thing.z < thing.height) {
+                    blocking = true;
+                } else if (open[1] - thing.z > 24 * Defs.FRACUNIT) {
+                    blocking = true;
+                }
             }
-        }
+            if (!blocking) {
+                return true;
+            }
+            if (inn.frac < best.frac) {
+                best.frac = inn.frac;
+                best.line = li;
+            }
+            return false;
+        });
     }
 
     /** P_HitSlideLine: keep the part of the move that runs along the wall. */
@@ -1114,8 +1183,8 @@ public final class Collision
 
     public static boolean checkSight(World world, Mobj a, Mobj b)
     {
-        Sector s1 = pointInSubsector(world, a.x, a.y).sector;
-        Sector s2 = pointInSubsector(world, b.x, b.y).sector;
+        Sector s1 = thingSector(world, a);
+        Sector s2 = thingSector(world, b);
         int n = world.sectors.size();
         byte[] rej = world.rejectmatrix;
         if (n != 0 && rej.length != 0) {
@@ -1125,24 +1194,150 @@ public final class Collision
                 return false;
             }
         }
-        if (s1 == s2) {
-            return true;
+        int eye = a.z + a.height - (a.height >> 2);
+        SightTrace st = new SightTrace();
+        st.top = (b.z + b.height) - eye;
+        st.bottom = b.z - eye;
+        st.z = eye;
+        st.x = a.x;
+        st.y = a.y;
+        st.dx = b.x - a.x;
+        st.dy = b.y - a.y;
+        st.t2x = b.x;
+        st.t2y = b.y;
+        world.validcount++;
+        if (world.numnodes == 0) {
+            return crossSightSubsector(world, 0, st);
         }
-        for (Line ln : world.lines) {
-            if (ln.backsector != null) {
-                int[] open = lineOpening(ln);
-                int top = open[0];
-                int bottom = open[1];
-                if (top - bottom > 0) {
-                    continue;
+        return crossSightBsp(world, world.numnodes - 1, st);
+    }
+
+    /** P_DivlineSide. On a horizontal line, vanilla compares x with the line's y. */
+    private static int sightSide(int x, int y, int lx, int ly, int ldx, int ldy)
+    {
+        if (ldx == 0) {
+            if (x == lx) {
+                return 2;
+            }
+            if (x <= lx) {
+                return ldy > 0 ? 1 : 0;
+            }
+            return ldy < 0 ? 1 : 0;
+        }
+        if (ldy == 0) {
+            if (x == ly) {
+                return 2;
+            }
+            if (y <= ly) {
+                return ldx < 0 ? 1 : 0;
+            }
+            return ldx > 0 ? 1 : 0;
+        }
+        long sdx = ((long) x - lx) >> Defs.FRACBITS;
+        long sdy = ((long) y - ly) >> Defs.FRACBITS;
+        long left = ((long) ldy >> Defs.FRACBITS) * sdx;
+        long right = sdy * ((long) ldx >> Defs.FRACBITS);
+        if (right < left) {
+            return 0;
+        }
+        if (left == right) {
+            return 2;
+        }
+        return 1;
+    }
+
+    private static boolean crossSightSubsector(World world, int num, SightTrace st)
+    {
+        if (num < 0 || num >= world.subsectors.size()) {
+            num = 0;
+        }
+        Subsector sub = world.subsectors.get(num);
+        int nSeg = sub.firstline;
+        for (int i = 0; i < sub.numlines; i++) {
+            Seg seg = nSeg >= 0 && nSeg < world.segs.size() ? world.segs.get(nSeg) : null;
+            nSeg++;
+            Line line = seg != null ? seg.linedef : null;
+            if (seg == null || line == null || line.v1 == null || line.v2 == null) {
+                continue;
+            }
+            if (line.validcount == world.validcount) {
+                continue;
+            }
+            line.validcount = world.validcount;
+            int s1 = sightSide(line.v1.x, line.v1.y, st.x, st.y, st.dx, st.dy);
+            int s2 = sightSide(line.v2.x, line.v2.y, st.x, st.y, st.dx, st.dy);
+            if (s1 == s2) {
+                continue;
+            }
+            int ldx = Compat.asI32(line.v2.x - line.v1.x);
+            int ldy = Compat.asI32(line.v2.y - line.v1.y);
+            s1 = sightSide(st.x, st.y, line.v1.x, line.v1.y, ldx, ldy);
+            s2 = sightSide(st.t2x, st.t2y, line.v1.x, line.v1.y, ldx, ldy);
+            if (s1 == s2) {
+                continue;
+            }
+            if (line.backsector == null || (line.flags & Defs.ML_TWOSIDED) == 0) {
+                return false;
+            }
+            Sector front = seg.frontsector;
+            Sector back = seg.backsector;
+            if (front == null || back == null) {
+                return false;
+            }
+            if (front.floorheight == back.floorheight && front.ceilingheight == back.ceilingheight) {
+                continue;
+            }
+            int opentop = Math.min(front.ceilingheight, back.ceilingheight);
+            int openbottom = Math.max(front.floorheight, back.floorheight);
+            if (openbottom >= opentop) {
+                return false;
+            }
+            int frac = interceptVector(
+                new Div(st.x, st.y, st.dx, st.dy),
+                new Div(line.v1.x, line.v1.y, ldx, ldy));
+            if (front.floorheight != back.floorheight) {
+                int slope = Compat.fixedDiv(openbottom - st.z, frac);
+                if (slope > st.bottom) {
+                    st.bottom = slope;
                 }
             }
-            Integer f = interceptFrac(a.x, a.y, b.x, b.y, ln);
-            if (f != null && f > Compat.intdiv(Defs.FRACUNIT, 64) && f < Defs.FRACUNIT - Compat.intdiv(Defs.FRACUNIT, 64)) {
+            if (front.ceilingheight != back.ceilingheight) {
+                int slope = Compat.fixedDiv(opentop - st.z, frac);
+                if (slope < st.top) {
+                    st.top = slope;
+                }
+            }
+            if (st.top <= st.bottom) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean crossSightBsp(World world, int bspnum, SightTrace st)
+    {
+        if ((bspnum & Defs.NF_SUBSECTOR) != 0 || bspnum < 0) {
+            if ((bspnum & 0xFFFF) == 0xFFFF) {
+                return crossSightSubsector(world, 0, st);
+            }
+            return crossSightSubsector(world, bspnum & 0x7FFF, st);
+        }
+        if (bspnum >= world.nodes.size()) {
+            return true;
+        }
+        Node node = world.nodes.get(bspnum);
+        int side = sightSide(st.x, st.y, node.x, node.y, node.dx, node.dy);
+        if (side == 2) {
+            side = 0;
+        }
+        if (!crossSightBsp(world, node.children[side], st)) {
+            return false;
+        }
+        int other = sightSide(st.t2x, st.t2y, node.x, node.y, node.dx, node.dy);
+        if (side == other) {
+            return true;
+        }
+        return crossSightBsp(world, node.children[side ^ 1], st);
     }
 
     public static boolean thingHeightClip(World world, Mobj thing)
@@ -1164,35 +1359,38 @@ public final class Collision
 
     public static boolean changeSector(World world, Sector sector, boolean crush)
     {
-        boolean nofit = false;
-        for (Mobj thing : world.mobjs) {
-            if (pointInSubsector(world, thing.x, thing.y).sector != sector) {
-                continue;
-            }
-            if (thingHeightClip(world, thing)) {
-                continue;
-            }
-            if (thing.health <= 0) {
-                thing.flags &= ~Defs.MF_SOLID;
-                thing.height = 0;
-                continue;
-            }
-            if ((thing.flags & Defs.MF_SHOOTABLE) == 0) {
-                continue;
-            }
-            nofit = true;
-            if (crush) {
-                thing.health -= 10;
-                if (thing.player != null) {
-                    thing.player.health = thing.health;
-                }
-                if (thing.health <= 0) {
-                    thing.flags &= ~Defs.MF_SOLID;
-                    thing.height = 0;
-                }
+        boolean[] nofit = { false };
+        int[] bb = sector.blockbox;
+        for (int bx = bb[Defs.BOXLEFT]; bx <= bb[Defs.BOXRIGHT]; bx++) {
+            for (int by = bb[Defs.BOXBOTTOM]; by <= bb[Defs.BOXTOP]; by++) {
+                blockThings(world, bx, by, thing -> {
+                    if (thingHeightClip(world, thing)) {
+                        return true;
+                    }
+                    if (thing.health <= 0) {
+                        thing.flags &= ~Defs.MF_SOLID;
+                        thing.height = 0;
+                        return true;
+                    }
+                    if ((thing.flags & Defs.MF_SHOOTABLE) == 0) {
+                        return true;
+                    }
+                    nofit[0] = true;
+                    if (crush) {
+                        thing.health -= 10;
+                        if (thing.player != null) {
+                            thing.player.health = thing.health;
+                        }
+                        if (thing.health <= 0) {
+                            thing.flags &= ~Defs.MF_SOLID;
+                            thing.height = 0;
+                        }
+                    }
+                    return true;
+                });
             }
         }
-        return nofit;
+        return nofit[0];
     }
 
     public static int approxDistance(int dx, int dy)
@@ -1200,11 +1398,9 @@ public final class Collision
         dx = Math.abs(dx);
         dy = Math.abs(dy);
         if (dx < dy) {
-            int tmp = dx;
-            dx = dy;
-            dy = tmp;
+            return dx + dy - (dx >> 1);
         }
-        return dx + Compat.intdiv(dy, 2);
+        return dx + dy - (dy >> 1);
     }
 
     public static int angleTo(int x1, int y1, int x2, int y2)
@@ -1241,6 +1437,19 @@ public final class Collision
             return Compat.asU32(Defs.ANG180 + ta[Tables.slopeDiv(y, x)]);
         }
         return Compat.asU32(0xc0000000 - 1 - ta[Tables.slopeDiv(x, y)]);
+    }
+
+    private static final class SightTrace
+    {
+        int top;
+        int bottom;
+        int z;
+        int x;
+        int y;
+        int dx;
+        int dy;
+        int t2x;
+        int t2y;
     }
 
     private static final class Div

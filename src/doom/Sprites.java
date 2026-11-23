@@ -181,7 +181,14 @@ public final class Sprites
             if (sprite.equals("") || mobj.player != null || (mobj.flags & Defs.MF_NOSECTOR) != 0) {
                 continue;
             }
-            SpriteDraw item = project(renderer, mobj);
+            Subsector sub = mobj.subsector != null
+                ? mobj.subsector
+                : Collision.pointInSubsector(world, mobj.x, mobj.y);
+            Sector sec = sub != null ? sub.sector : null;
+            if (sec == null || sec.validcount != world.validcount) {
+                continue;
+            }
+            SpriteDraw item = project(renderer, world, mobj);
             if (item != null) {
                 visible.add(item);
             }
@@ -192,7 +199,24 @@ public final class Sprites
         }
     }
 
-    private static SpriteDraw project(Renderer renderer, Mobj mobj)
+    private static byte[] spriteColormap(Renderer renderer, SpriteDraw sprite)
+    {
+        if (renderer.fixedcolormap != null) {
+            return renderer.fixedcolormap;
+        }
+        boolean fullbright = sprite.mo != null && (sprite.mo.frame & Info.FF_FULLBRIGHT) != 0;
+        if (fullbright || sprite.lightlevel == null) {
+            return renderer.res.colormap(0);
+        }
+        int lightnum = Math.max(
+            0,
+            Math.min(Defs.LIGHTLEVELS - 1, (sprite.lightlevel >> 4) + renderer.extralight)
+        );
+        int index = Math.min(Defs.MAXLIGHTSCALE - 1, Compat.ushr(sprite.scale, Defs.LIGHTSCALESHIFT));
+        return renderer.res.colormap(renderer.scalelight[lightnum][index]);
+    }
+
+    private static SpriteDraw project(Renderer renderer, World world, Mobj mobj)
     {
         int trX = Compat.asI32(mobj.x - renderer.viewx);
         int trY = Compat.asI32(mobj.y - renderer.viewy);
@@ -244,8 +268,12 @@ public final class Sprites
         if (visibleX1 > x1) {
             startfrac += xiscale * (visibleX1 - x1);
         }
+        Subsector sectorSub = mobj.subsector != null
+            ? mobj.subsector
+            : Collision.pointInSubsector(world, mobj.x, mobj.y);
         SpriteDraw item = new SpriteDraw();
         item.mo = mobj;
+        item.lightlevel = sectorSub != null && sectorSub.sector != null ? sectorSub.sector.lightlevel : null;
         item.patch = patch;
         item.w = width;
         item.scale = xscale << renderer.detailshift;
@@ -397,9 +425,7 @@ public final class Sprites
         int angle = (128 * leveltime) & Defs.FINEMASK;
         int sx = Defs.FRACUNIT
             + Compat.fixedMul(bob, Tables.finesine[(angle + Compat.intdiv(Defs.FINEANGLES, 4)) % Tables.finesine.length]);
-        angle &= Compat.intdiv(Defs.FINEANGLES, 2) - 1;
-        int sy = WEAPONTOP + Compat.fixedMul(bob, Tables.finesine[angle]);
-        player.pspriteSy = sy;
+        int sy = player.pspriteSy != 0 ? player.pspriteSy : WEAPONTOP;
         return new int[] { sx, sy };
     }
 
@@ -429,8 +455,7 @@ public final class Sprites
             columnOffsets[column] = Bin.u32(patch, 8 + column * 4);
         }
         boolean fuzz = sprite.mo != null && (sprite.mo.flags & Defs.MF_SHADOW) != 0;
-        byte[] colormap = fuzz ? renderer.res.colormap(6)
-                : (renderer.fixedcolormap != null ? renderer.fixedcolormap : renderer.res.colormap(0));
+        byte[] colormap = fuzz ? renderer.res.colormap(6) : spriteColormap(renderer, sprite);
         int patchLength = patch.length;
         int frac = sprite.startfrac;
         for (int x = sprite.x1; x <= sprite.x2; ++x) {
@@ -504,6 +529,7 @@ public final class Sprites
     private static final class SpriteDraw
     {
         Mobj mo;
+        Integer lightlevel;
         byte[] patch;
         int w;
         int scale;

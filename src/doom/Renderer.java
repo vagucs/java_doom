@@ -17,6 +17,22 @@ import java.util.List;
 
 public final class Renderer
 {
+    /** R_CheckBBox corner table — same as Harbour/Node CHECKCOORD. */
+    private static final int[][] CHECKCOORD = {
+        { Defs.BOXRIGHT, Defs.BOXTOP, Defs.BOXLEFT, Defs.BOXBOTTOM },
+        { Defs.BOXRIGHT, Defs.BOXTOP, Defs.BOXLEFT, Defs.BOXTOP },
+        { Defs.BOXRIGHT, Defs.BOXBOTTOM, Defs.BOXLEFT, Defs.BOXTOP },
+        { 0, 0, 0, 0 },
+        { Defs.BOXLEFT, Defs.BOXTOP, Defs.BOXLEFT, Defs.BOXBOTTOM },
+        { 0, 0, 0, 0 },
+        { Defs.BOXRIGHT, Defs.BOXBOTTOM, Defs.BOXRIGHT, Defs.BOXTOP },
+        { 0, 0, 0, 0 },
+        { Defs.BOXLEFT, Defs.BOXTOP, Defs.BOXRIGHT, Defs.BOXBOTTOM },
+        { Defs.BOXLEFT, Defs.BOXBOTTOM, Defs.BOXRIGHT, Defs.BOXBOTTOM },
+        { Defs.BOXLEFT, Defs.BOXBOTTOM, Defs.BOXRIGHT, Defs.BOXTOP },
+        { 0, 0, 0, 0 },
+    };
+
     private static final int HEIGHTBITS = 12;
     private static final int HEIGHTUNIT = 1 << 12;
     private static final int ANGLETOSKYSHIFT = 22;
@@ -349,6 +365,8 @@ public final class Renderer
         this.fb = fb;
         this.visplanes.clear();
         this.drawsegs.clear();
+        // R_SetupFrame: sprites only from sectors marked this frame.
+        world.validcount++;
         this.clearClip();
         if (world.nodes != null && !world.nodes.isEmpty()) {
             this.renderBspNode(world, world.numnodes - 1);
@@ -442,28 +460,109 @@ public final class Renderer
         Node node = world.nodes.get(bspnum);
         int side = this.pointOnSide(this.viewx, this.viewy, node);
         this.renderBspNode(world, node.children[side]);
-        this.renderBspNode(world, node.children[side ^ 1]);
+        if (this.checkBBox(node.bbox[side ^ 1])) {
+            this.renderBspNode(world, node.children[side ^ 1]);
+        }
+    }
+
+    /** R_CheckBBox: reject a BSP child fully occluded by solidsegs or the FOV. */
+    private boolean checkBBox(int[] bspcoord)
+    {
+        int boxx;
+        if (this.viewx <= bspcoord[Defs.BOXLEFT]) {
+            boxx = 0;
+        } else if (this.viewx < bspcoord[Defs.BOXRIGHT]) {
+            boxx = 1;
+        } else {
+            boxx = 2;
+        }
+        int boxy;
+        if (this.viewy >= bspcoord[Defs.BOXTOP]) {
+            boxy = 0;
+        } else if (this.viewy > bspcoord[Defs.BOXBOTTOM]) {
+            boxy = 1;
+        } else {
+            boxy = 2;
+        }
+        int boxpos = (boxy << 2) + boxx;
+        if (boxpos == 5) {
+            return true;
+        }
+        int[] c = CHECKCOORD[boxpos];
+        int x1 = bspcoord[c[0]];
+        int y1 = bspcoord[c[1]];
+        int x2 = bspcoord[c[2]];
+        int y2 = bspcoord[c[3]];
+        int angle1 = Compat.asU32(this.pointToAngle(x1, y1) - this.viewangle);
+        int angle2 = Compat.asU32(this.pointToAngle(x2, y2) - this.viewangle);
+        int span = Compat.asU32(angle1 - angle2);
+        if (Integer.compareUnsigned(span, Defs.ANG180) >= 0) {
+            return true;
+        }
+        int tspan = Compat.asU32(angle1 + this.clipangle);
+        if (Integer.compareUnsigned(tspan, Compat.asU32(2 * this.clipangle)) > 0) {
+            tspan = Compat.asU32(tspan - 2 * this.clipangle);
+            if (Integer.compareUnsigned(tspan, span) >= 0) {
+                return false;
+            }
+            angle1 = this.clipangle;
+        }
+        tspan = Compat.asU32(this.clipangle - angle2);
+        if (Integer.compareUnsigned(tspan, Compat.asU32(2 * this.clipangle)) > 0) {
+            tspan = Compat.asU32(tspan - 2 * this.clipangle);
+            if (Integer.compareUnsigned(tspan, span) >= 0) {
+                return false;
+            }
+            angle2 = Compat.asU32(-this.clipangle);
+        }
+        int mask = Compat.intdiv(Defs.FINEANGLES, 2) - 1;
+        int sx1 = this.viewangletox[Compat.ushr(Compat.asU32(angle1 + Defs.ANG90), Defs.ANGLETOFINESHIFT) & mask];
+        int sx2 = this.viewangletox[Compat.ushr(Compat.asU32(angle2 + Defs.ANG90), Defs.ANGLETOFINESHIFT) & mask];
+        if (sx1 == sx2) {
+            return false;
+        }
+        --sx2;
+        // Walk the sentinel (last = +∞). Do not stop at newend.
+        int start = 0;
+        while (start < this.solidsegs.size() && this.solidsegs.get(start).last < sx2) {
+            ++start;
+        }
+        if (start >= this.solidsegs.size()) {
+            return true;
+        }
+        if (sx1 >= this.solidsegs.get(start).first && sx2 <= this.solidsegs.get(start).last) {
+            return false;
+        }
+        return true;
     }
 
     private void subsector(World world, int num)
     {
         Subsector sub = world.subsectors.get(num);
         this.frontsector = sub.sector;
+        if (this.frontsector.validcount != world.validcount) {
+            this.frontsector.validcount = world.validcount;
+        }
         int light = Math.max(
             0,
             Math.min(Defs.LIGHTLEVELS - 1, (this.frontsector.lightlevel >> 4) + this.extralight)
         );
         this.walllights = this.scalelight[light];
-        this.floorplane = this.findPlane(
-            this.frontsector.floorheight,
-            this.frontsector.floorpic,
-            this.frontsector.lightlevel
-        );
-        this.ceilingplane = this.findPlane(
-            this.frontsector.ceilingheight,
-            this.frontsector.ceilingpic,
-            this.frontsector.lightlevel
-        );
+        this.floorplane = this.frontsector.floorheight < this.viewz
+            ? this.findPlane(
+                this.frontsector.floorheight,
+                this.frontsector.floorpic,
+                this.frontsector.lightlevel
+            )
+            : null;
+        this.ceilingplane = this.frontsector.ceilingheight > this.viewz
+                || this.frontsector.ceilingpic == this.res.skyflatnum
+            ? this.findPlane(
+                this.frontsector.ceilingheight,
+                this.frontsector.ceilingpic,
+                this.frontsector.lightlevel
+            )
+            : null;
         int line = sub.firstline;
         for (int i = 0; i < sub.numlines; ++i, ++line) {
             this.addLine(world.segs.get(line));
@@ -505,11 +604,29 @@ public final class Renderer
             return;
         }
         this.backsector = line.backsector;
+        boolean clipsolid;
         if (
             this.backsector == null
                 || this.backsector.ceilingheight <= this.frontsector.floorheight
                 || this.backsector.floorheight >= this.frontsector.ceilingheight
         ) {
+            clipsolid = true;
+        } else if (
+            this.backsector.ceilingheight != this.frontsector.ceilingheight
+                || this.backsector.floorheight != this.frontsector.floorheight
+        ) {
+            clipsolid = false;
+        } else if (
+            this.backsector.ceilingpic == this.frontsector.ceilingpic
+                && this.backsector.floorpic == this.frontsector.floorpic
+                && this.backsector.lightlevel == this.frontsector.lightlevel
+                && (line.sidedef == null || line.sidedef.midtexture == 0)
+        ) {
+            return;
+        } else {
+            clipsolid = false;
+        }
+        if (clipsolid) {
             this.clipSolid(x1, x2 - 1);
         } else {
             this.clipPass(x1, x2 - 1);
@@ -522,10 +639,10 @@ public final class Renderer
             return;
         }
         int start = 0;
-        while (start < this.newend && this.solidsegs.get(start).last < first - 1) {
+        while (start < this.solidsegs.size() && this.solidsegs.get(start).last < first - 1) {
             ++start;
         }
-        if (start >= this.newend) {
+        if (start >= this.solidsegs.size()) {
             this.storeWallRange(first, last);
             return;
         }
@@ -543,7 +660,7 @@ public final class Renderer
             return;
         }
         int next = start;
-        while (next + 1 < this.newend && last >= this.solidsegs.get(next + 1).first - 1) {
+        while (next + 1 < this.solidsegs.size() && last >= this.solidsegs.get(next + 1).first - 1) {
             this.storeWallRange(this.solidsegs.get(next).last + 1, this.solidsegs.get(next + 1).first - 1);
             ++next;
             if (last <= this.solidsegs.get(next).last) {
@@ -575,10 +692,10 @@ public final class Renderer
             return;
         }
         int start = 0;
-        while (start < this.newend && this.solidsegs.get(start).last < first - 1) {
+        while (start < this.solidsegs.size() && this.solidsegs.get(start).last < first - 1) {
             ++start;
         }
-        if (start >= this.newend) {
+        if (start >= this.solidsegs.size()) {
             this.storeWallRange(first, last);
             return;
         }
@@ -593,7 +710,7 @@ public final class Renderer
             return;
         }
         int next = start;
-        while (next + 1 < this.newend && last >= this.solidsegs.get(next + 1).first - 1) {
+        while (next + 1 < this.solidsegs.size() && last >= this.solidsegs.get(next + 1).first - 1) {
             this.storeWallRange(this.solidsegs.get(next).last + 1, this.solidsegs.get(next + 1).first - 1);
             ++next;
             if (last <= this.solidsegs.get(next).last) {
@@ -718,10 +835,10 @@ public final class Renderer
         ) {
             this.markceiling = false;
         }
-        if (this.markceiling) {
+        if (this.markceiling && this.ceilingplane != null) {
             this.ceilingplane = this.checkPlane(this.ceilingplane, start, stop);
         }
-        if (this.markfloor) {
+        if (this.markfloor && this.floorplane != null) {
             this.floorplane = this.checkPlane(this.floorplane, start, stop);
         }
         this.worldtop >>= 4;

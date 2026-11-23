@@ -99,6 +99,11 @@ public final class Enemy
         prndindex = 0;
     }
 
+    public static int rngIndex()
+    {
+        return prndindex;
+    }
+
     static int random()
     {
         prndindex = (prndindex + 1) & 255;
@@ -114,15 +119,36 @@ public final class Enemy
         return prof.walkTics;
     }
 
-    public static void tickEnemies(World world, Game game)
+    /**
+     * @param missilesOnly null = all; false = skip missiles; true = missiles only.
+     * Player movement runs here, after the acid test in playerThink.
+     */
+    public static void tickEnemies(World world, Game game, Boolean missilesOnly)
     {
         Player p = game.player;
         if (p == null || p.mo == null) {
             return;
         }
-        for (Mobj mo : new ArrayList<>(world.mobjs)) {
-            if (mo != p.mo)
-                Thinker.mobjThinker(world, mo, game);
+        int i = 0;
+        while (i < world.mobjs.size()) {
+            Mobj mo = world.mobjs.get(i);
+            boolean isMis = (mo.flags & Defs.MF_MISSILE) != 0;
+            if (Boolean.FALSE.equals(missilesOnly) && isMis) {
+                i++;
+                continue;
+            }
+            if (Boolean.TRUE.equals(missilesOnly) && !isMis) {
+                i++;
+                continue;
+            }
+            Mobj next = i + 1 < world.mobjs.size() ? world.mobjs.get(i + 1) : null;
+            Thinker.mobjThinker(world, mo, game);
+            if (next == null) {
+                i++;
+                continue;
+            }
+            int found = world.mobjs.indexOf(next);
+            i = found >= 0 ? found : i + 1;
         }
     }
 
@@ -139,19 +165,26 @@ public final class Enemy
     public static void killMonster(Mobj mo, Game game, Mobj source)
     {
         mo.flags &= ~(Defs.MF_SHOOTABLE | Defs.MF_FLOAT | Defs.MF_SKULLFLY);
+        if (mo.type != Info.MT_SKULL) {
+            mo.flags &= ~Defs.MF_NOGRAVITY;
+        }
         mo.flags |= Defs.MF_CORPSE | Defs.MF_DROPOFF;
         mo.height >>= 2;
-        if (source != null && source.player != null && (mo.flags & Defs.MF_COUNTKILL) != 0) {
-            source.player.killcount++;
+        if ((mo.flags & Defs.MF_COUNTKILL) != 0) {
+            Player who = source != null && source.player != null ? source.player : game.player;
+            if (who != null) {
+                who.killcount++;
+            }
         }
+        boolean wasAlive = mo.alive;
         int xdeath = Info.miInt(mo.type, Info.MI_XDEATHSTATE);
         int state = mo.health < -Info.miInt(mo.type, Info.MI_SPAWNHEALTH) && xdeath != Info.S_NULL
                 ? xdeath : Info.miInt(mo.type, Info.MI_DEATHSTATE);
         Thinker.setMobjState(mo, state, game.world, game);
-        if (mo.alive) {
-            mo.tics -= Enemy.random() & 3;
-            if (mo.tics < 1)
-                mo.tics = 1;
+        mo.tics -= Enemy.random() & 3;
+        if (mo.tics < 1)
+            mo.tics = 1;
+        if (wasAlive) {
             int drop = -1;
             if (mo.type == Info.MT_POSSESSED)
                 drop = Info.MT_CLIP;
@@ -159,6 +192,8 @@ public final class Enemy
                 drop = Info.MT_SHOTGUN;
             else if (mo.type == Info.MT_CHAINGUY)
                 drop = Info.MT_CHAINGUN;
+            else if (mo.type == Info.MT_WOLFSS)
+                drop = Info.MT_CLIP;
             if (drop >= 0) {
                 Mobj item = Thinker.spawnMobj(game.world, mo.x, mo.y, Thinker.ONFLOORZ, drop, game);
                 item.flags |= Defs.MF_DROPPED;
@@ -220,7 +255,7 @@ public final class Enemy
         if (emitter == null) {
             return;
         }
-        Sector sec = Collision.pointInSubsector(world, emitter.x, emitter.y).sector;
+        Sector sec = Collision.thingSector(world, emitter);
         world.validcount++;
         Enemy.recursiveSound(world, sec, 0, emitter);
     }
@@ -260,11 +295,11 @@ public final class Enemy
     private static void look(World world, Mobj mo, Mobj player, Game game)
     {
         mo.threshold = 0;
-        if ((player.flags & Defs.MF_SHOOTABLE) == 0) {
-            return;
-        }
         boolean see = false;
-        Sector sec = Collision.pointInSubsector(world, mo.x, mo.y).sector;
+        Subsector sub = mo.subsector != null
+                ? mo.subsector
+                : Collision.pointInSubsector(world, mo.x, mo.y);
+        Sector sec = sub.sector;
         Mobj target = sec.soundtarget;
         if (target != null && (target.flags & Defs.MF_SHOOTABLE) != 0) {
             mo.target = target;
@@ -277,8 +312,6 @@ public final class Enemy
         if (!see && !Enemy.lookForPlayer(world, mo, player, false)) {
             return;
         }
-        mo.movedir = DI_NODIR;
-        mo.movecount = 0;
         String seeSound = Info.miStr(mo.type, Info.MI_SEESOUND);
         if ("posit1".equals(seeSound) || "posit2".equals(seeSound) || "posit3".equals(seeSound)) {
             seeSound = new String[] {"posit1", "posit2", "posit3"}[Enemy.random() % 3];
@@ -345,7 +378,7 @@ public final class Enemy
             Enemy.faceMoveDir(mo);
         }
         Mobj target = mo.target;
-        if (target == null || target.health <= 0 || (target.flags & Defs.MF_SHOOTABLE) == 0) {
+        if (target == null || (target.flags & Defs.MF_SHOOTABLE) == 0) {
             if (!Enemy.lookForPlayer(world, mo, player, true)) {
                 Thinker.setMobjState(mo, Info.miInt(mo.type, Info.MI_SPAWNSTATE), world, game);
             }
@@ -361,9 +394,7 @@ public final class Enemy
         int speed = Info.miInt(mo.type, Info.MI_SPEED);
         int meleeState = Info.miInt(mo.type, Info.MI_MELEESTATE);
         int missileState = Info.miInt(mo.type, Info.MI_MISSILESTATE);
-        if (meleeState != Info.S_NULL
-                && dist < Defs.MELEERANGE - 20 * Defs.FRACUNIT + target.radius
-                && Collision.checkSight(world, mo, target)) {
+        if (meleeState != Info.S_NULL && Enemy.checkMeleeRange(world, mo)) {
             String attackSound = Info.miStr(mo.type, Info.MI_ATTACKSOUND);
             if (!attackSound.isEmpty())
                 game.startSound(attackSound);
@@ -387,11 +418,14 @@ public final class Enemy
 
     private static boolean missileOk(World w, Mobj mo, Mobj target, int dist, boolean melee)
     {
+        if (!Collision.checkSight(w, mo, target)) {
+            return false;
+        }
         if ((mo.flags & Defs.MF_JUSTHIT) != 0) {
             mo.flags &= ~Defs.MF_JUSTHIT;
             return true;
         }
-        if (!Collision.checkSight(w, mo, target) || mo.reactiontime != 0) {
+        if (mo.reactiontime != 0) {
             return false;
         }
         int d = dist - 64 * Defs.FRACUNIT;
@@ -569,6 +603,7 @@ public final class Enemy
 
     private static void faceTarget(Mobj mo, Mobj t)
     {
+        mo.flags &= ~Defs.MF_AMBUSH;
         mo.angle = Collision.angleTo(mo.x, mo.y, t.x, t.y);
         if ((t.flags & Defs.MF_SHADOW) != 0) {
             mo.angle = Compat.asU32(mo.angle + (Enemy.random() - Enemy.random()) * 2097152);
@@ -610,20 +645,35 @@ public final class Enemy
                 return false;
             }
             mo.movedir = DI_NODIR;
+            boolean opened = false;
             for (int i = Collision.lastSpechit.size() - 1; i >= 0; i--) {
                 Line ln = Collision.lastSpechit.get(i);
-                if (ln.special != 0) {
-                    game.useSpecial(ln, mo, 0);
-                    return true;
+                if (!monsterMayUse(mo, ln)) {
+                    continue;
                 }
+                game.useSpecial(ln, mo, 0);
+                opened = true;
             }
-            return false;
+            return opened;
         }
         mo.flags &= ~Defs.MF_INFLOAT;
         if ((mo.flags & Defs.MF_FLOAT) == 0) {
             mo.z = mo.floorz;
         }
         return true;
+    }
+
+    /** Vanilla P_UseSpecialLine: monsters only open manual doors 1/32/33/34. */
+    private static boolean monsterMayUse(Mobj mo, Line ln)
+    {
+        if (mo.player != null) {
+            return ln.special != 0;
+        }
+        if ((ln.flags & Defs.ML_SECRET) != 0) {
+            return false;
+        }
+        int sp = ln.special;
+        return sp == 1 || sp == 32 || sp == 33 || sp == 34;
     }
 
     private static void newChaseDir(World world, Mobj mo, Game game)
@@ -704,7 +754,6 @@ public final class Enemy
             }
         }
         mo.movedir = DI_NODIR;
-        mo.movecount = Enemy.random() & 15;
     }
 
     private static Mobj spawnMissile(World world, Mobj src, Mobj dest, String sprite, int speed, int damage)
@@ -759,11 +808,11 @@ public final class Enemy
         mo.momy = Compat.fixedMul(speed, Tables.fineSin(a));
         mo.target = src;
         mo.momz = (dest.z - src.z) / steps;
-        Enemy.checkMissileSpawn(mo);
+        Enemy.checkMissileSpawn(world, mo, game);
         return mo;
     }
 
-    private static void checkMissileSpawn(Mobj mo)
+    private static void checkMissileSpawn(World world, Mobj mo, Game game)
     {
         mo.tics -= Enemy.random() & 3;
         if (mo.tics < 1)
@@ -771,9 +820,12 @@ public final class Enemy
         mo.x += mo.momx >> 1;
         mo.y += mo.momy >> 1;
         mo.z += mo.momz >> 1;
+        if (world != null && game != null && !Collision.tryMove(world, mo, mo.x, mo.y, game)) {
+            Enemy.explodeMissile(world, mo, game, null);
+        }
     }
 
-    static void spawnPlayerMissile(World world, Mobj src, String sprite, int speed, int damage, String kind)
+    static void spawnPlayerMissile(World world, Mobj src, String sprite, int speed, int damage, String kind, Game game)
     {
         int typ = "rocket".equals(kind) ? Info.MT_ROCKET
                 : ("plasma".equals(kind) ? Info.MT_PLASMA : Info.MT_BFG);
@@ -789,10 +841,7 @@ public final class Enemy
         mo.momy = Compat.fixedMul(actualSpeed, Tables.fineSin(a));
         mo.target = src;
         mo.momz = Compat.fixedMul(actualSpeed, aim.slope);
-        if (damage != 0) {
-            mo.damage = damage;
-        }
-        Enemy.checkMissileSpawn(mo);
+        Enemy.checkMissileSpawn(world, mo, game);
     }
 
     /** The blast reached this body, including a shot that died on the floor under it. */
@@ -880,39 +929,63 @@ public final class Enemy
 
     private static void explodeMissile(World world, Mobj mo, Game game, Mobj hit)
     {
-        if (hit == null) {
-            hit = mo.struck != null ? mo.struck : Enemy.missileVictim(world, mo);
-        }
-        mo.struck = null;
-        if (hit != null) {
-            Mobj source = mo.target != null ? mo.target : mo;
-            int damage = mo.damage != 0 ? mo.damage : Info.miInt(mo.type, Info.MI_DAMAGE);
-            game.damageMobj(hit, source, damage * ((Enemy.random() % 8) + 1), mo);
-        }
         mo.momx = mo.momy = mo.momz = 0;
-        mo.flags &= ~Defs.MF_MISSILE;
         Thinker.setMobjState(mo, Info.miInt(mo.type, Info.MI_DEATHSTATE), world, game);
+        mo.tics -= Enemy.random() & 3;
+        if (mo.tics < 1) {
+            mo.tics = 1;
+        }
+        mo.flags &= ~Defs.MF_MISSILE;
+        String sfx = Info.miStr(mo.type, Info.MI_DEATHSOUND);
+        if (sfx != null && !sfx.isEmpty() && game != null) {
+            game.startSound(sfx);
+        }
+    }
+
+    private static boolean checkMeleeRange(World world, Mobj mo)
+    {
+        Mobj target = mo.target;
+        if (target == null) {
+            return false;
+        }
+        int rad = Info.miInt(target.type, Info.MI_RADIUS);
+        int dist = Collision.approxDistance(target.x - mo.x, target.y - mo.y);
+        if (dist >= Defs.MELEERANGE - 20 * Defs.FRACUNIT + rad) {
+            return false;
+        }
+        return Collision.checkSight(world, mo, target);
     }
 
     private static void radiusAttack(World world, Mobj spot, Mobj source, int damage, Game game)
     {
-        for (Mobj o : new ArrayList<>(world.mobjs)) {
-            if (o == spot || (o.flags & Defs.MF_SHOOTABLE) == 0
-                    || o.type == Info.MT_CYBORG || o.type == Info.MT_SPIDER) {
-                continue;
-            }
-            int dx = Math.abs(o.x - spot.x);
-            int dy = Math.abs(o.y - spot.y);
-            int dist = (dx > dy ? dx : dy) - o.radius;
-            if (dist < 0) {
-                dist = 0;
-            }
-            dist >>= 16;
-            if (dist >= damage) {
-                continue;
-            }
-            if (Collision.checkSight(world, o, spot)) {
-                game.damageMobj(o, source != null ? source : spot, damage - dist, spot);
+        int distMap = damage * Defs.FRACUNIT + Defs.MAXRADIUS;
+        int yh = Compat.shar(spot.y + distMap - world.bmaporgy, Defs.MAPBLOCKSHIFT);
+        int yl = Compat.shar(spot.y - distMap - world.bmaporgy, Defs.MAPBLOCKSHIFT);
+        int xh = Compat.shar(spot.x + distMap - world.bmaporgx, Defs.MAPBLOCKSHIFT);
+        int xl = Compat.shar(spot.x - distMap - world.bmaporgx, Defs.MAPBLOCKSHIFT);
+        Mobj src = source != null ? source : spot;
+        for (int y = yl; y <= yh; y++) {
+            for (int x = xl; x <= xh; x++) {
+                Collision.blockThings(world, x, y, other -> {
+                    if ((other.flags & Defs.MF_SHOOTABLE) == 0
+                            || other.type == Info.MT_CYBORG || other.type == Info.MT_SPIDER) {
+                        return true;
+                    }
+                    int dx = Math.abs(other.x - spot.x);
+                    int dy = Math.abs(other.y - spot.y);
+                    int dist = (dx > dy ? dx : dy) - other.radius;
+                    if (dist < 0) {
+                        dist = 0;
+                    }
+                    dist >>= 16;
+                    if (dist >= damage) {
+                        return true;
+                    }
+                    if (Collision.checkSight(world, other, spot)) {
+                        game.damageMobj(other, src, damage - dist, spot);
+                    }
+                    return true;
+                });
             }
         }
     }
@@ -1036,20 +1109,20 @@ public final class Enemy
     {
         int n = 0;
         for (Mobj other : world.mobjs) {
-            if (other.type == Info.MT_SKULL && other.health > 0) {
+            if (other.type == Info.MT_SKULL) {
                 n++;
             }
         }
-        if (n >= 21) {
+        if (n > 20) {
             return;
         }
-        int pre = 4 * Defs.FRACUNIT + Compat.intdiv(3 * actor.radius, 2);
+        int skullRad = Info.miInt(Info.MT_SKULL, Info.MI_RADIUS);
+        int pre = 4 * Defs.FRACUNIT + Compat.intdiv(3 * (actor.radius + skullRad), 2);
         int x = actor.x + Compat.fixedMul(pre, Tables.fineCos(ang));
         int y = actor.y + Compat.fixedMul(pre, Tables.fineSin(ang));
-        Mobj skull = Thinker.spawnMobj(world, x, y, actor.z, Info.MT_SKULL, game);
-        skull.angle = ang;
-        MoveCheck chk = Collision.checkPosition(world, skull, skull.x, skull.y);
-        if (chk.blocked) {
+        int z = actor.z + 8 * Defs.FRACUNIT;
+        Mobj skull = Thinker.spawnMobj(world, x, y, z, Info.MT_SKULL, game);
+        if (!Collision.tryMove(world, skull, skull.x, skull.y, game)) {
             game.damageMobj(skull, actor, 10000, actor);
             return;
         }
@@ -1331,7 +1404,7 @@ public final class Enemy
         if ((mo.flags & Defs.MF_CORPSE) != 0) {
             int quarter = Defs.FRACUNIT / 4;
             if (mo.momx > quarter || mo.momx < -quarter || mo.momy > quarter || mo.momy < -quarter) {
-                Sector sec = Collision.pointInSubsector(world, mo.x, mo.y).sector;
+                Sector sec = Collision.thingSector(world, mo);
                 if (mo.floorz != sec.floorheight) {
                     return;
                 }
@@ -1388,6 +1461,13 @@ public final class Enemy
             }
         }
         if (mo.z <= mo.floorz) {
+            // Ultimate/Doom2: bounce before clearing momz. Later exes zero first,
+            // which turns the bounce into zero and lost souls stick to the floor.
+            boolean lostSoulBounce = game != null && game.wad != null
+                && game.wad.checkNumForName("MAP01") >= 0;
+            if (lostSoulBounce && (mo.flags & Defs.MF_SKULLFLY) != 0) {
+                mo.momz = -mo.momz;
+            }
             if (mo.momz < 0) {
                 if (player != null && mo.momz < -Defs.GRAVITY * 8) {
                     player.deltaviewheight = Compat.shar(mo.momz, 3);
@@ -1398,7 +1478,7 @@ public final class Enemy
                 mo.momz = 0;
             }
             mo.z = mo.floorz;
-            if ((mo.flags & Defs.MF_SKULLFLY) != 0 && (mo.flags & Defs.MF_MISSILE) == 0) {
+            if (!lostSoulBounce && (mo.flags & Defs.MF_SKULLFLY) != 0 && (mo.flags & Defs.MF_MISSILE) == 0) {
                 mo.momz = -mo.momz;
             }
             if ((mo.flags & Defs.MF_MISSILE) != 0 && (mo.flags & Defs.MF_NOCLIP) == 0) {
@@ -1470,6 +1550,11 @@ public final class Enemy
                 break;
             case "Scream": {
                 String sound = Info.miStr(mo.type, Info.MI_DEATHSOUND);
+                if ("podth1".equals(sound) || "podth2".equals(sound) || "podth3".equals(sound)) {
+                    sound = new String[] {"podth1", "podth2", "podth3"}[Enemy.random() % 3];
+                } else if ("bgdth1".equals(sound) || "bgdth2".equals(sound)) {
+                    sound = new String[] {"bgdth1", "bgdth2"}[Enemy.random() % 2];
+                }
                 if (!sound.isEmpty()) game.startSound(sound);
                 break;
             }
@@ -1504,19 +1589,30 @@ public final class Enemy
             case "TroopAttack":
             case "SargAttack":
             case "HeadAttack":
-            case "BruisAttack":
                 if (mo.target == null) break;
                 Enemy.faceTarget(mo, mo.target);
-                int dist = Collision.approxDistance(mo.target.x - mo.x, mo.target.y - mo.y);
-                if (dist < Defs.MELEERANGE + mo.radius) {
-                    int mul = "SargAttack".equals(name) ? 4
-                            : ("HeadAttack".equals(name) || "BruisAttack".equals(name) ? 10 : 3);
-                    if ("TroopAttack".equals(name)) game.startSound("claw");
-                    game.damageMobj(mo.target, mo, ((Enemy.random() % 8) + 1) * mul);
+                if (Enemy.checkMeleeRange(world, mo)) {
+                    if ("SargAttack".equals(name)) {
+                        game.damageMobj(mo.target, mo, ((Enemy.random() % 10) + 1) * 4);
+                    } else if ("HeadAttack".equals(name)) {
+                        game.startSound("claw");
+                        game.damageMobj(mo.target, mo, ((Enemy.random() % 6) + 1) * 10);
+                    } else {
+                        game.startSound("claw");
+                        game.damageMobj(mo.target, mo, ((Enemy.random() % 8) + 1) * 3);
+                    }
                 } else if (!"SargAttack".equals(name)) {
-                    int typ = "TroopAttack".equals(name) ? Info.MT_TROOPSHOT
-                            : ("HeadAttack".equals(name) ? Info.MT_HEADSHOT : Info.MT_BRUISERSHOT);
+                    int typ = "TroopAttack".equals(name) ? Info.MT_TROOPSHOT : Info.MT_HEADSHOT;
                     Enemy.spawnMissileMt(world, mo, mo.target, typ, game, null);
+                }
+                break;
+            case "BruisAttack":
+                if (mo.target == null) break;
+                if (Enemy.checkMeleeRange(world, mo)) {
+                    game.startSound("claw");
+                    game.damageMobj(mo.target, mo, ((Enemy.random() % 8) + 1) * 10);
+                } else {
+                    Enemy.spawnMissileMt(world, mo, mo.target, Info.MT_BRUISERSHOT, game, null);
                 }
                 break;
             case "SkullAttack":
@@ -1589,10 +1685,9 @@ public final class Enemy
             case "SkelFist":
                 if (mo.target != null) {
                     Enemy.faceTarget(mo, mo.target);
-                    if (Collision.approxDistance(mo.target.x - mo.x, mo.target.y - mo.y)
-                            < Defs.MELEERANGE + mo.radius) {
+                    if (Enemy.checkMeleeRange(world, mo)) {
                         game.startSound("skepch");
-                        game.damageMobj(mo.target, mo, ((Enemy.random() % 8) + 1) * 6);
+                        game.damageMobj(mo.target, mo, ((Enemy.random() % 10) + 1) * 6);
                     }
                 }
                 break;

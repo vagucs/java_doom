@@ -171,6 +171,10 @@ public final class Game
         {
             return;
         }
+        if ((target.flags & Defs.MF_SKULLFLY) != 0)
+        {
+            target.momx = target.momy = target.momz = 0;
+        }
         if (target.player != null && skill == Defs.SK_BABY)
         {
             damage >>= 1;
@@ -222,8 +226,9 @@ public final class Game
                 p.health = 0;
                 p.playerstate = Defs.PST_DEAD;
                 target.alive = false;
-                target.flags &= ~(Defs.MF_SOLID | Defs.MF_SHOOTABLE);
+                target.flags &= ~Defs.MF_SOLID;
                 startSound("pldeth");
+                Enemy.killMonster(target, this, source);
             }
             else
             {
@@ -252,9 +257,12 @@ public final class Game
                 Thinker.setMobjState(target, painState, world, this);
         }
         target.reactiontime = 0;
-        if (source != null && source != target && target.player == null)
+        if (source != null && source != target && target.player == null
+                && (target.threshold == 0 || target.type == Info.MT_VILE)
+                && source.type != Info.MT_VILE)
         {
             target.target = source;
+            target.threshold = 100;
             int spawnState = Info.miInt(target.type, Info.MI_SPAWNSTATE);
             int seeState = Info.miInt(target.type, Info.MI_SEESTATE);
             if (target.istate == spawnState && seeState != Info.S_NULL)
@@ -278,8 +286,10 @@ public final class Game
         world = new World();
         world.setupLevel(wad, res, episode, mapn);
         specials = new Specials(world, res, sound);
+        specials.game = this;
         player = null;
         int[] counts = Mobj.spawnMapThings(world, skill, this);
+        specials.spawnSpecials();
         if (player == null)
         {
             throw new RuntimeException("no player 1 start");
@@ -734,6 +744,55 @@ public final class Game
         demoRecording = false;
     }
 
+    private java.io.Writer syncLog;
+
+    private static int mapUnit(int v)
+    {
+        return v >= 0 ? v / 65536 : -((-v) / 65536);
+    }
+
+    private void syncDemoLog()
+    {
+        if (player == null || player.mo == null || world == null)
+        {
+            return;
+        }
+        try
+        {
+            if (syncLog == null)
+            {
+                String demo = timedemoName != null ? timedemoName : (playdemoName != null ? playdemoName : "demo1");
+                demo = demo.toLowerCase();
+                if (demo.endsWith(".lmp"))
+                {
+                    demo = demo.substring(0, demo.length() - 4);
+                }
+                syncLog = new java.io.FileWriter("_sync_" + demo + ".log", false);
+            }
+            Mobj mo = player.mo;
+            int n = 0;
+            int sx = 0;
+            for (Mobj m : world.mobjs)
+            {
+                if ((m.flags & Defs.MF_COUNTKILL) != 0 && m.health > 0)
+                {
+                    n++;
+                    sx += mapUnit(m.x);
+                }
+            }
+            syncLog.write(leveltime + " " + player.health + " " + player.armorpoints
+                + " " + mapUnit(mo.x) + " " + mapUnit(mo.y)
+                + " " + mapUnit(mo.z) + " " + mapUnit(mo.floorz)
+                + " " + mo.momx + " " + mo.momy + " " + mo.angle
+                + " " + n + " " + sx + " " + Enemy.rngIndex()
+                + " " + player.readyweapon + " " + player.ammo[Defs.AM_MISL] + "\n");
+            syncLog.flush();
+        }
+        catch (java.io.IOException ignored)
+        {
+        }
+    }
+
     public void checkDemoStatus()
     {
         if (timingdemo)
@@ -1005,7 +1064,12 @@ public final class Game
             loadLevel(false);
             return;
         }
-        Enemy.tickEnemies(world, this);
+        Enemy.tickEnemies(world, this, Boolean.FALSE);
+        if (specials != null)
+        {
+            specials.tickLightsEarly();
+        }
+        Enemy.tickEnemies(world, this, Boolean.TRUE);
         if (specials != null)
         {
             specials.tick();
@@ -1015,6 +1079,10 @@ public final class Game
             startSound("swtchx");
             completeLevel();
             return;
+        }
+        if (demoPlayback)
+        {
+            syncDemoLog();
         }
         ++leveltime;
         automap.ticker(this);

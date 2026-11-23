@@ -30,4 +30,6 @@ public class Sector
     public int validcount;
     public int soundtraversed;
     public Mobj soundtarget;
+    /** P_GroupLines blockmap box so a moving floor reclips things that overlap it. */
+    public int[] blockbox = new int[4];
 }

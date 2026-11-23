@@ -1,5 +1,5 @@
 /**
- * DOOM generic portado de Harbour para Java CLI com SDL2.
+ * DOOM generic portado de Harbour para Java CLI com SDL3.
  *
  * Por Wagner Nunes da Silva
  *
@@ -19,7 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** SDL2 video + audio (doomgeneric / i_video) via JNA. */
+/** SDL3 video + audio (doomgeneric / i_video) via JNA. */
 public final class Video
 {
     public static final int SCALE_MIN = 1;
@@ -27,12 +27,10 @@ public final class Video
     private static final int SDL_INIT_AUDIO = 0x00000010;
     private static final int SDL_INIT_VIDEO = 0x00000020;
     private static final int SDL_INIT_EVENTS = 0x00004000;
-    private static final int SDL_WINDOWPOS_CENTERED = 0x2fff0000;
-    private static final int SDL_WINDOW_SHOWN = 0x00000004;
-    private static final int SDL_WINDOW_RESIZABLE = 0x00000020;
-    private static final int SDL_WINDOW_FULLSCREEN_DESKTOP = 0x00001001;
-    private static final int SDL_RENDERER_ACCELERATED = 0x00000002;
-    private static final int SDL_RENDERER_PRESENTVSYNC = 0x00000004;
+    private static final int SDL_WINDOWPOS_CENTERED = 0x2FFF0000;
+    private static final long SDL_WINDOW_RESIZABLE = 0x20L;
+    private static final int SDL_SCALEMODE_NEAREST = 0;
+    private static final int SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK = 0xFFFFFFFF;
     private static final int SDL_PIXELFORMAT_ARGB8888 = 0x16362004;
     private static final int SDL_TEXTUREACCESS_STREAMING = 1;
     private static final int SDL_QUIT = 0x100;
@@ -41,7 +39,7 @@ public final class Video
     private static final int SDL_MOUSEMOTION = 0x400;
     private static final int SDL_MOUSEBUTTONDOWN = 0x401;
     private static final int SDL_MOUSEBUTTONUP = 0x402;
-    private static final int AUDIO_S16LSB = 0x8010;
+    private static final int AUDIO_S16LE = 0x8010;
 
     public final int[] fb = new int[Defs.SCREENWIDTH * Defs.SCREENHEIGHT];
     public boolean fullscreen;
@@ -52,17 +50,16 @@ public final class Video
     public String windowTitle = "DOOM";
     public int fpsValue;
 
-    private Sdl2 sdl;
+    private Sdl3 sdl;
     private Pointer window;
     private Pointer renderer;
     private Pointer texture;
-    private int audioDev;
+    private Pointer audio;
     private final int[][] palette = new int[256][3];
     private final byte[] argbBytes = new byte[Defs.SCREENWIDTH * Defs.SCREENHEIGHT * 4];
     private final Memory argb = new Memory(Defs.SCREENWIDTH * Defs.SCREENHEIGHT * 4L);
-    private final Memory eventBuf = new Memory(64);
-    private final Memory audioSpec = new Memory(32);
-    private final Memory audioHave = new Memory(32);
+    private final Memory eventBuf = new Memory(128);
+    private final Memory audioSpec = new Memory(16);
     private int fpsFrames;
     private int fpsStamp;
     private boolean mouseGrab;
@@ -70,19 +67,19 @@ public final class Video
 
     private static String libraryPath()
     {
-        String env = System.getenv("SDL2_PATH");
+        String env = System.getenv("SDL3_PATH");
         if (env != null && !env.isEmpty() && Files.isRegularFile(Path.of(env))) {
             return env;
         }
+        String bits = "32".equals(System.getProperty("sun.arch.data.model")) ? "x86" : "x64";
         Path here = Path.of("").toAbsolutePath();
         Path[] candidates = {
-            here.resolve("lib").resolve("SDL2.dll"),
-            here.resolve("SDL2.dll"),
-            here.resolve("lib").resolve("libSDL2.so"),
-            here.resolve("lib").resolve("libSDL2.so.0"),
-            here.resolve("lib").resolve("libSDL2.dylib"),
-            here.resolve("..").resolve("php_doom").resolve("lib").resolve("SDL2.dll"),
-            here.resolve("..").resolve("node_doom").resolve("lib").resolve("SDL2.dll"),
+            here.resolve("sdl3").resolve("SDL3-3.4.18-win32-" + bits).resolve("SDL3.dll"),
+            here.resolve("lib").resolve("SDL3.dll"),
+            here.resolve("SDL3.dll"),
+            here.resolve("lib").resolve("libSDL3.so"),
+            here.resolve("lib").resolve("libSDL3.so.0"),
+            here.resolve("lib").resolve("libSDL3.dylib"),
         };
         for (Path p : candidates) {
             if (Files.isRegularFile(p)) {
@@ -91,12 +88,12 @@ public final class Video
         }
         String os = System.getProperty("os.name", "").toLowerCase();
         if (os.contains("win")) {
-            return "SDL2";
+            return "SDL3";
         }
         if (os.contains("mac")) {
-            return "SDL2";
+            return "SDL3";
         }
-        return "SDL2";
+        return "SDL3";
     }
 
     public void init(boolean fullscreen, String title)
@@ -104,23 +101,20 @@ public final class Video
         java.util.Arrays.fill(fb, 0);
         this.fullscreen = fullscreen;
         this.windowTitle = title;
-        this.sdl = Native.load(libraryPath(), Sdl2.class);
-        if (novsync) {
-            this.sdl.SDL_SetHint("SDL_RENDER_VSYNC", "0");
-        }
+        this.sdl = Native.load(libraryPath(), Sdl3.class);
         int flags = SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO;
-        if (this.sdl.SDL_Init(flags) != 0) {
+        if (this.sdl.SDL_Init(flags) == 0) {
             throw new RuntimeException("SDL_Init: " + error());
         }
-        this.sdl.SDL_ShowCursor(0);
         applyMode();
+        this.sdl.SDL_HideCursor();
         openAudio();
         fpsStamp = ticksMs();
     }
 
     public int ticksMs()
     {
-        return sdl != null ? sdl.SDL_GetTicks() : (int) System.currentTimeMillis();
+        return sdl != null ? (int) sdl.SDL_GetTicks() : (int) System.currentTimeMillis();
     }
 
     public void delay(int ms)
@@ -136,7 +130,14 @@ public final class Video
             return;
         }
         mouseGrab = enabled;
-        sdl.SDL_SetRelativeMouseMode(enabled ? 1 : 0);
+        if (window != null) {
+            sdl.SDL_SetWindowRelativeMouseMode(window, (byte) (enabled ? 1 : 0));
+        }
+        if (enabled) {
+            sdl.SDL_HideCursor();
+        } else {
+            sdl.SDL_ShowCursor();
+        }
     }
 
     public void toggleFullscreen()
@@ -175,7 +176,7 @@ public final class Video
 
     public void playSfx(byte[] pcm, int volume)
     {
-        if (pcm == null || pcm.length == 0 || sdl == null || audioDev == 0) {
+        if (pcm == null || pcm.length == 0 || sdl == null || audio == null) {
             return;
         }
         double gain = Math.max(0, Math.min(15, volume)) / 15.0;
@@ -220,7 +221,7 @@ public final class Video
         argb.write(0, argbBytes, 0, argbBytes.length);
         sdl.SDL_UpdateTexture(texture, null, argb, Defs.SCREENWIDTH * 4);
         sdl.SDL_RenderClear(renderer);
-        sdl.SDL_RenderCopy(renderer, texture, null, null);
+        sdl.SDL_RenderTexture(renderer, texture, null, null);
         sdl.SDL_RenderPresent(renderer);
         fpsFrames++;
         int now = ticksMs();
@@ -248,26 +249,26 @@ public final class Video
             }
             if (type == SDL_MOUSEMOTION) {
                 GameEvent motion = new GameEvent("mousemotion");
-                motion.dx = eventBuf.getInt(28);
-                motion.dy = eventBuf.getInt(32);
+                motion.dx = (int) eventBuf.getFloat(36);
+                motion.dy = (int) eventBuf.getFloat(40);
                 out.add(motion);
                 continue;
             }
             if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP) {
                 GameEvent button = new GameEvent(type == SDL_MOUSEBUTTONDOWN ? "mousedown" : "mouseup");
-                button.button = eventBuf.getByte(16) & 0xff;
+                button.button = eventBuf.getByte(24) & 0xff;
                 out.add(button);
                 continue;
             }
             if (type != SDL_KEYDOWN && type != SDL_KEYUP) {
                 continue;
             }
-            boolean repeat = eventBuf.getByte(13) != 0;
+            boolean repeat = eventBuf.getByte(37) != 0;
             if (repeat && type == SDL_KEYDOWN) {
                 continue;
             }
-            int scan = eventBuf.getInt(16);
-            int sym = eventBuf.getInt(20);
+            int scan = eventBuf.getInt(24);
+            int sym = eventBuf.getInt(28);
             if (scan == 45 || scan == 86) {
                 sym = scan == 86 ? Keys.KP_MINUS : Keys.MINUS;
             } else if (scan == 46 || scan == 87) {
@@ -275,7 +276,7 @@ public final class Video
             } else if (sym == Keys.PLUS) {
                 sym = Keys.EQUALS;
             }
-            int mod = eventBuf.getShort(24) & 0xffff;
+            int mod = eventBuf.getShort(32) & 0xffff;
             GameEvent ev = new GameEvent(type == SDL_KEYDOWN ? "keydown" : "keyup");
             ev.key = sym;
             ev.sym = sym;
@@ -292,9 +293,9 @@ public final class Video
         if (sdl == null) {
             return;
         }
-        if (audioDev != 0) {
-            sdl.SDL_CloseAudioDevice(audioDev);
-            audioDev = 0;
+        if (audio != null) {
+            sdl.SDL_DestroyAudioStream(audio);
+            audio = null;
         }
         if (texture != null) {
             sdl.SDL_DestroyTexture(texture);
@@ -320,37 +321,22 @@ public final class Video
         int w = Defs.SCREENWIDTH * scale;
         int h = Defs.SCREENHEIGHT * scale;
         if (window == null) {
-            window = sdl.SDL_CreateWindow(
-                windowTitle,
-                SDL_WINDOWPOS_CENTERED,
-                SDL_WINDOWPOS_CENTERED,
-                w,
-                h,
-                SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-            );
+            window = sdl.SDL_CreateWindow(windowTitle, w, h, SDL_WINDOW_RESIZABLE);
             if (window == null) {
                 throw new RuntimeException("SDL_CreateWindow: " + error());
             }
-            int rendererFlags = SDL_RENDERER_ACCELERATED;
-            if (!novsync) {
-                rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
-            }
-            renderer = sdl.SDL_CreateRenderer(window, -1, rendererFlags);
-            if (renderer == null) {
-                renderer = sdl.SDL_CreateRenderer(window, -1, 0);
-            }
+            renderer = sdl.SDL_CreateRenderer(window, null);
             if (renderer == null) {
                 throw new RuntimeException("SDL_CreateRenderer: " + error());
             }
-            if (novsync) {
-                sdl.SDL_RenderSetVSync(renderer, 0);
-            }
+            sdl.SDL_SetRenderVSync(renderer, novsync ? 0 : 1);
             texture = sdl.SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Defs.SCREENWIDTH, Defs.SCREENHEIGHT);
             if (texture == null) {
                 throw new RuntimeException("SDL_CreateTexture: " + error());
             }
+            sdl.SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
         }
-        sdl.SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        sdl.SDL_SetWindowFullscreen(window, (byte) (fullscreen ? 1 : 0));
         if (!fullscreen) {
             sdl.SDL_SetWindowSize(window, w, h);
             sdl.SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -365,27 +351,25 @@ public final class Video
         }
         try {
             audioSpec.clear();
-            audioSpec.setInt(0, 11025);
-            audioSpec.setShort(4, (short) AUDIO_S16LSB);
-            audioSpec.setByte(6, (byte) 1);
-            audioSpec.setShort(8, (short) 512);
-            audioHave.clear();
-            int dev = sdl.SDL_OpenAudioDevice(null, 0, audioSpec, audioHave, 0);
-            if (dev != 0) {
-                audioDev = dev;
-                sdl.SDL_PauseAudioDevice(audioDev, 0);
+            audioSpec.setInt(0, AUDIO_S16LE);
+            audioSpec.setInt(4, 1);
+            audioSpec.setInt(8, 11025);
+            Pointer stream = sdl.SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, audioSpec, null, null);
+            if (stream != null) {
+                audio = stream;
+                sdl.SDL_ResumeAudioStreamDevice(stream);
             }
         } catch (Exception e) {
-            audioDev = 0;
+            audio = null;
         }
     }
 
     private void pumpAudio()
     {
-        if (sdl == null || audioDev == 0 || mix.isEmpty()) {
+        if (sdl == null || audio == null || mix.isEmpty()) {
             return;
         }
-        int queued = sdl.SDL_GetQueuedAudioSize(audioDev);
+        int queued = sdl.SDL_GetAudioStreamQueued(audio);
         // 16-bit mono at 11025 Hz. Three device periods (~139 ms). A 1 s
         // backlog is what made shots and doors land late.
         int limit = 512 * 2 * 3;
@@ -404,7 +388,7 @@ public final class Video
         }
         Memory buf = new Memory(pcm.length);
         buf.write(0, pcm, 0, pcm.length);
-        sdl.SDL_QueueAudio(audioDev, buf, pcm.length);
+        sdl.SDL_PutAudioStreamData(audio, buf, pcm.length);
     }
 
     private String error()

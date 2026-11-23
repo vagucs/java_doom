@@ -51,6 +51,7 @@ public class World
         loadNodes(wad.cacheLumpNum(lump + 7));
         loadThings(wad.cacheLumpNum(lump + 1));
         loadBlockmap(wad.cacheLumpNum(lump + 10));
+        groupLineBlockboxes();
         byte[] reject = wad.cacheLumpNum(lump + 9);
         this.rejectmatrix = reject != null ? reject : new byte[0];
         this.numnodes = this.nodes.size();
@@ -192,10 +193,15 @@ public class World
             int p = o + 8;
             nd.bbox = new int[2][4];
             for (int child = 0; child < 2; child++) {
-                nd.bbox[child][0] = Bin.i16(data, p) * Defs.FRACUNIT;
-                nd.bbox[child][1] = Bin.i16(data, p + 2) * Defs.FRACUNIT;
-                nd.bbox[child][2] = Bin.i16(data, p + 4) * Defs.FRACUNIT;
-                nd.bbox[child][3] = Bin.i16(data, p + 6) * Defs.FRACUNIT;
+                // WAD order is TOP, BOTTOM, LEFT, RIGHT. checkBBox uses LEFT/RIGHT/BOTTOM/TOP.
+                int top = Bin.i16(data, p) * Defs.FRACUNIT;
+                int bottom = Bin.i16(data, p + 2) * Defs.FRACUNIT;
+                int left = Bin.i16(data, p + 4) * Defs.FRACUNIT;
+                int right = Bin.i16(data, p + 6) * Defs.FRACUNIT;
+                nd.bbox[child][Defs.BOXLEFT] = left;
+                nd.bbox[child][Defs.BOXRIGHT] = right;
+                nd.bbox[child][Defs.BOXBOTTOM] = bottom;
+                nd.bbox[child][Defs.BOXTOP] = top;
                 p += 8;
             }
             nd.children = new int[] { Bin.u16(data, p), Bin.u16(data, p + 2) };
@@ -214,6 +220,53 @@ public class World
                 Bin.i16(data, o + 6),
                 Bin.i16(data, o + 8)
             ));
+        }
+    }
+
+    /** P_GroupLines: sector blockbox for P_ChangeSector. */
+    private void groupLineBlockboxes()
+    {
+        if (bmapwidth <= 0 || bmapheight <= 0) {
+            return;
+        }
+        for (Sector sector : sectors) {
+            Integer left = null;
+            Integer right = null;
+            Integer bottom = null;
+            Integer top = null;
+            for (Line li : sector.lines) {
+                if (li.v1 == null || li.v2 == null) {
+                    continue;
+                }
+                Vertex[] verts = { li.v1, li.v2 };
+                for (Vertex v : verts) {
+                    left = left == null || v.x < left ? v.x : left;
+                    right = right == null || v.x > right ? v.x : right;
+                    bottom = bottom == null || v.y < bottom ? v.y : bottom;
+                    top = top == null || v.y > top ? v.y : top;
+                }
+            }
+            if (left == null) {
+                continue;
+            }
+            int block = Compat.shar(top - bmaporgy + Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            if (block >= bmapheight) {
+                block = bmapheight - 1;
+            }
+            int boxtop = Math.max(0, block);
+            block = Compat.shar(bottom - bmaporgy - Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            int boxbottom = Math.max(0, block);
+            block = Compat.shar(right - bmaporgx + Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            if (block >= bmapwidth) {
+                block = bmapwidth - 1;
+            }
+            int boxright = Math.max(0, block);
+            block = Compat.shar(left - bmaporgx - Defs.MAXRADIUS, Defs.MAPBLOCKSHIFT);
+            int boxleft = Math.max(0, block);
+            sector.blockbox[Defs.BOXLEFT] = boxleft;
+            sector.blockbox[Defs.BOXRIGHT] = boxright;
+            sector.blockbox[Defs.BOXBOTTOM] = boxbottom;
+            sector.blockbox[Defs.BOXTOP] = boxtop;
         }
     }
 

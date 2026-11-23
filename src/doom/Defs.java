@@ -144,6 +144,7 @@ public final class Defs
     public static final int BT_ATTACK = 1;
     public static final int BT_USE = 2;
     public static final int BT_CHANGE = 4;
+    public static final int BT_SPECIAL = 128;
     public static final int BT_WEAPONMASK = 8 + 16 + 32;
     public static final int BT_WEAPONSHIFT = 3;
     public static final int PST_LIVE = 0;

@@ -460,6 +460,8 @@ public final class Saveg
         game.world = new World();
         game.world.setupLevel(game.wad, game.res, game.episode, game.mapn);
         game.specials = new Specials(game.world, game.res, game.sound);
+        game.specials.game = game;
+        game.specials.spawnSpecials();
         World world = game.world;
         restoreSectors(world.sectors, asList(state.get("sectors")));
         restoreSides(world.sides, asList(state.get("sides")));
