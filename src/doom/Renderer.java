@@ -127,6 +127,23 @@ public final class Renderer
     public final List<DrawSeg> drawsegs = new ArrayList<>();
     private int basexscale;
     private int baseyscale;
+    /** R_MakeSpans / R_MapPlane (Harbour r_plane.prg). */
+    private int[] spanstart;
+    private int[] cachedheight;
+    private int[] cacheddistance;
+    private int[] cachedxstep;
+    private int[] cachedystep;
+    private int planeheight;
+    private int[] planezlight;
+    private byte[] dsSource = new byte[0];
+    private byte[] dsColormap = new byte[0];
+    private int dsY;
+    private int dsX1;
+    private int dsX2;
+    private int dsXfrac;
+    private int dsYfrac;
+    private int dsXstep;
+    private int dsYstep;
 
     public Renderer(Resources res)
     {
@@ -154,6 +171,11 @@ public final class Renderer
         for (int i = 0; i < Defs.SCREENWIDTH; ++i) {
             this.columnofs[i] = i;
         }
+        this.spanstart = new int[Defs.SCREENHEIGHT];
+        this.cachedheight = new int[Defs.SCREENHEIGHT];
+        this.cacheddistance = new int[Defs.SCREENHEIGHT];
+        this.cachedxstep = new int[Defs.SCREENHEIGHT];
+        this.cachedystep = new int[Defs.SCREENHEIGHT];
         this.scaledviewwidth = Defs.SCREENWIDTH;
         this.pspritescale = Defs.FRACUNIT;
         this.pspriteiscale = Defs.FRACUNIT;
@@ -358,6 +380,8 @@ public final class Renderer
             this.centerxfrac != 0 ? this.centerxfrac : 1
         );
         this.baseyscale = -Compat.fixedDiv(Tables.finesine[ang], this.centerxfrac != 0 ? this.centerxfrac : 1);
+        // R_ClearPlanes: basexscale changes with the view angle.
+        Arrays.fill(this.cachedheight, 0);
     }
 
     public void render(World world, int[] fb)
@@ -1192,45 +1216,141 @@ public final class Renderer
                 continue;
             }
             int light = Math.max(0, Math.min(Defs.LIGHTLEVELS - 1, (plane.lightlevel >> 4) + this.extralight));
-            int[] planezlight = this.zlight[light];
-            byte[] flat = this.res.flatPixels(plane.picnum);
-            int planeheight = Compat.absFixed(plane.height - this.viewz);
-            if (planeheight == 0) {
+            this.planezlight = this.zlight[light];
+            this.dsSource = this.res.flatPixels(plane.picnum);
+            this.planeheight = Compat.absFixed(plane.height - this.viewz);
+            if (this.planeheight == 0) {
                 continue;
             }
-            int cachedY = -1;
-            int distance = 0;
-            for (int x = Math.max(0, plane.minx); x < Math.min(this.viewwidth, plane.maxx + 1); ++x) {
-                int t1 = plane.top[x];
-                int b1 = plane.bottom[x];
-                if (t1 > b1 || t1 == 0xff) {
-                    continue;
-                }
-                for (int y = t1; y <= Math.min(b1, this.viewheight - 1); ++y) {
-                    if (y != cachedY) {
-                        cachedY = y;
-                        distance = Compat.fixedMul(planeheight, this.yslope[y]);
-                    }
-                    int length = Compat.fixedMul(distance, this.distscale[x]);
-                    int ang = Compat.ushr(Compat.asU32(this.viewangle + this.xtoviewangle[x]), Defs.ANGLETOFINESHIFT)
-                        & Defs.FINEMASK;
-                    int xfrac = this.viewx
-                        + Compat.fixedMul(Tables.finesine[(ang + Compat.intdiv(Defs.FINEANGLES, 4)) & Defs.FINEMASK], length);
-                    int yfrac = -this.viewy - Compat.fixedMul(Tables.finesine[ang], length);
-                    int index = Math.min(Defs.MAXLIGHTZ - 1, Compat.ushr(distance, Defs.LIGHTZSHIFT));
-                    byte[] cm = this.fixedcolormap != null ? this.fixedcolormap : this.res.colormap(planezlight[index]);
-                    int spot = ((xfrac >> 16) & 63) | ((yfrac >> 10) & 0x0fc0);
-                    int source = spot < flat.length ? flat[spot] & 0xff : 0;
-                    int pix = cm[source] & 0xff;
-                    if (this.detailshift != 0) {
-                        int xx = x << 1;
-                        int off = this.ylookup[y] + this.columnofs[xx];
-                        this.fb[off] = pix;
-                        this.fb[off + 1] = pix;
-                    } else {
-                        this.fb[this.ylookup[y] + this.columnofs[x]] = pix;
-                    }
-                }
+            int stop = plane.maxx + 1;
+            for (int x = plane.minx; x <= stop; ++x) {
+                this.makeSpans(
+                    x,
+                    this.planeTop(plane, x - 1),
+                    this.planeBottom(plane, x - 1),
+                    this.planeTop(plane, x),
+                    this.planeBottom(plane, x)
+                );
+            }
+        }
+    }
+
+    private int planeTop(Visplane plane, int x)
+    {
+        if (x < 0 || x >= Defs.SCREENWIDTH) {
+            return 0xff;
+        }
+        return plane.top[x];
+    }
+
+    private int planeBottom(Visplane plane, int x)
+    {
+        if (x < 0 || x >= Defs.SCREENWIDTH) {
+            return 0;
+        }
+        return plane.bottom[x];
+    }
+
+    /** R_MapPlane: one horizontal floor/ceiling span at screen row y. */
+    private void mapPlane(int y, int x1, int x2)
+    {
+        if (y < 0 || y >= this.viewheight || x1 > x2) {
+            return;
+        }
+        int distance;
+        if (this.planeheight != this.cachedheight[y]) {
+            this.cachedheight[y] = this.planeheight;
+            distance = Compat.fixedMul(this.planeheight, this.yslope[y]);
+            this.cacheddistance[y] = distance;
+            this.cachedxstep[y] = Compat.fixedMul(distance, this.basexscale);
+            this.cachedystep[y] = Compat.fixedMul(distance, this.baseyscale);
+        } else {
+            distance = this.cacheddistance[y];
+        }
+        this.dsXstep = this.cachedxstep[y];
+        this.dsYstep = this.cachedystep[y];
+        int length = Compat.fixedMul(distance, this.distscale[x1]);
+        int ang = Compat.ushr(Compat.asU32(this.viewangle + this.xtoviewangle[x1]), Defs.ANGLETOFINESHIFT)
+            & Defs.FINEMASK;
+        this.dsXfrac = this.viewx + Compat.fixedMul(
+            Tables.finesine[(ang + Compat.intdiv(Defs.FINEANGLES, 4)) & Defs.FINEMASK],
+            length
+        );
+        this.dsYfrac = -this.viewy - Compat.fixedMul(Tables.finesine[ang], length);
+        if (this.fixedcolormap != null) {
+            this.dsColormap = this.fixedcolormap;
+        } else {
+            int index = Math.min(Defs.MAXLIGHTZ - 1, Compat.ushr(distance, Defs.LIGHTZSHIFT));
+            this.dsColormap = this.res.colormap(this.planezlight[index]);
+        }
+        this.dsY = y;
+        this.dsX1 = x1;
+        this.dsX2 = x2;
+        this.drawSpan();
+    }
+
+    /** R_MakeSpans: emit completed horizontal spans, open new ones. */
+    private void makeSpans(int x, int t1, int b1, int t2, int b2)
+    {
+        while (t1 < t2 && t1 <= b1) {
+            this.mapPlane(t1, this.spanstart[t1], x - 1);
+            t1 += 1;
+        }
+        while (b1 > b2 && b1 >= t1) {
+            this.mapPlane(b1, this.spanstart[b1], x - 1);
+            b1 -= 1;
+        }
+        while (t2 < t1 && t2 <= b2) {
+            this.spanstart[t2] = x;
+            t2 += 1;
+        }
+        while (b2 > b1 && b2 >= t2) {
+            this.spanstart[b2] = x;
+            b2 -= 1;
+        }
+    }
+
+    /** R_DrawSpan / R_DrawSpanLow — walk one horizontal span. */
+    private void drawSpan()
+    {
+        int y = this.dsY;
+        int x1 = this.dsX1;
+        int x2 = this.dsX2;
+        int xfrac = this.dsXfrac;
+        int yfrac = this.dsYfrac;
+        int xstep = this.dsXstep;
+        int ystep = this.dsYstep;
+        byte[] flat = this.dsSource;
+        byte[] cm = this.dsColormap;
+        int limit = Defs.SCREENWIDTH * Defs.SCREENHEIGHT;
+        if (this.detailshift != 0) {
+            x1 <<= 1;
+            x2 <<= 1;
+            int dest = this.ylookup[y] + this.columnofs[x1];
+            int count = (x2 - x1) >> 1;
+            while (count >= 0 && dest + 1 < limit) {
+                int spot = ((xfrac >> 16) & 63) | ((yfrac >> 10) & 0x0fc0);
+                int source = spot >= 0 && spot < flat.length ? flat[spot] & 0xff : 0;
+                int pix = source < cm.length ? cm[source] & 0xff : source;
+                this.fb[dest] = pix;
+                this.fb[dest + 1] = pix;
+                dest += 2;
+                xfrac = Compat.asI32(xfrac + xstep);
+                yfrac = Compat.asI32(yfrac + ystep);
+                count -= 1;
+            }
+        } else {
+            int dest = this.ylookup[y] + this.columnofs[x1];
+            int count = x2 - x1;
+            while (count >= 0 && dest < limit) {
+                int spot = ((xfrac >> 16) & 63) | ((yfrac >> 10) & 0x0fc0);
+                int source = spot >= 0 && spot < flat.length ? flat[spot] & 0xff : 0;
+                int pix = source < cm.length ? cm[source] & 0xff : source;
+                this.fb[dest] = pix;
+                dest += 1;
+                xfrac = Compat.asI32(xfrac + xstep);
+                yfrac = Compat.asI32(yfrac + ystep);
+                count -= 1;
             }
         }
     }
